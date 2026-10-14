@@ -348,4 +348,19 @@ describe('ModelWhitelistSelector', () => {
     expect(syncButton).toBeDefined()
     expect(syncButton?.exists()).toBe(true)
   })
+
+  it('includes both 2.5 entries and marks them as web compatibility entries only for Free', async () => {
+    const wrapper = mountSelector({ webImageCompatibility: true })
+    await wrapper.get('.cursor-pointer').trigger('click')
+    for (const model of ['gpt-image-2.5-flare', 'gpt-image-2.5-sunburst']) {
+      const row = findModelRow(wrapper, model)
+      expect(row.text()).toContain('admin.accounts.openai.webImageEntryBadge')
+      await row.get('[data-testid="select-model"]').trigger('click')
+      expect(wrapper.emitted('update:modelValue')?.at(-1)?.[0]).toContain(model)
+    }
+    await wrapper.setProps({ webImageCompatibility: false })
+    expect(wrapper.text()).not.toContain('admin.accounts.openai.webImageEntryBadge')
+    wrapper.unmount()
+  })
+
 })

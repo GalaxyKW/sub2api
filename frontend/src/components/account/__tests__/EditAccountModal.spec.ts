@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { defineComponent } from 'vue'
-import { mount } from '@vue/test-utils'
+import { flushPromises, mount } from '@vue/test-utils'
 import {
   BUILTIN_PLATFORM_CATALOG,
   resetPlatformCatalog,
@@ -2035,6 +2035,101 @@ describe('EditAccountModal temp-unschedulable rule scope', () => {
     await addRule!.trigger('click')
 
     expect(checkedScopes(wrapper)).toEqual(['temp-unsched-scope-model'])
+    wrapper.unmount()
+  })
+})
+
+describe('EditAccountModal Free web image settings', () => {
+  function freeAccount() {
+    const account = buildOpenAIOAuthParentAccount()
+    account.credentials = { ...account.credentials, plan_type: 'free', model_mapping: { 'gpt-6-luna': 'gpt-6-luna', 'gpt-image-2': 'gpt-image-2', illustration: 'gpt-image-2.5-flare' } }
+    account.extra = { chatgpt_web_image_enabled: true, chatgpt_web_image_regular_chat: true, unrelated_setting: 'keep' }
+    return account
+  }
+
+  beforeEach(() => {
+    authIsSimpleMode.value = true
+    updateAccountMock.mockReset().mockResolvedValue(freeAccount())
+    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
+  })
+
+  it('shows the independent bridge only for Free OAuth parents', () => {
+    const free = freeAccount()
+    const eligible = mountModal(free)
+    expect(eligible.find('[data-testid="free-web-image-settings"]').exists()).toBe(true)
+    eligible.unmount()
+    for (const change of [{ credentials: { plan_type: 'pro' } }, { credentials: {} }, { type: 'apikey' }, { type: 'setup-token' }, { parent_account_id: 2 }]) {
+      const wrapper = mountModal({ ...free, ...change })
+      expect(wrapper.find('[data-testid="free-web-image-settings"]').exists()).toBe(false)
+      wrapper.unmount()
+    }
+  })
+
+  it('hydrates legacy defaults, persists aliases and preview consent, and restores them on reopen', async () => {
+    const account = freeAccount()
+    const wrapper = mountModal(account)
+    expect(wrapper.get<HTMLInputElement>('[data-testid="free-web-image-enabled"]').element.checked).toBe(true)
+    expect(wrapper.get<HTMLSelectElement>('[data-testid="free-web-image-default"]').element.value).toBe('gpt-image-2')
+    expect(wrapper.get('[data-testid="free-web-image-default"]').findAll('option').map(option => option.attributes('value'))).toEqual(['gpt-image-2', 'illustration'])
+    await wrapper.get('[data-testid="free-web-image-default"]').setValue('illustration')
+    await wrapper.get('[data-testid="free-web-image-preview"]').setValue(false)
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    const payload = updateAccountMock.mock.calls[0][1]
+    expect(payload.extra).toMatchObject({ chatgpt_web_image_enabled: true, chatgpt_web_image_regular_chat: true, chatgpt_web_image_markdown_preview: false, chatgpt_web_image_default_model: 'illustration', unrelated_setting: 'keep' })
+    expect(payload.credentials.model_mapping).toEqual(account.credentials.model_mapping)
+    await wrapper.setProps({ show: false })
+    await wrapper.setProps({ show: true, account: { ...account, extra: payload.extra } })
+    expect(wrapper.get<HTMLSelectElement>('[data-testid="free-web-image-default"]').element.value).toBe('illustration')
+    expect(wrapper.get<HTMLInputElement>('[data-testid="free-web-image-preview"]').element.checked).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('persists off independently of Hosted policy and retains settings when toggled back on', async () => {
+    const account = freeAccount()
+    account.extra.codex_image_generation_bridge = true
+    const wrapper = mountModal(account)
+    await wrapper.get('[data-testid="free-web-image-enabled"]').setValue(false)
+    expect(wrapper.find('[data-testid="free-web-image-off"]').exists()).toBe(true)
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    const payload = updateAccountMock.mock.calls[0][1]
+    expect(payload.extra).toMatchObject({ chatgpt_web_image_enabled: false, codex_image_generation_bridge: true })
+    await wrapper.setProps({ show: false })
+    await wrapper.setProps({ show: true, account: { ...account, extra: payload.extra } })
+    expect(wrapper.get<HTMLInputElement>('[data-testid="free-web-image-enabled"]').element.checked).toBe(false)
+    await wrapper.get('[data-testid="free-web-image-enabled"]').setValue(true)
+    expect(wrapper.get<HTMLInputElement>('[data-testid="free-web-image-regular-chat"]').element.checked).toBe(true)
+    expect(wrapper.get<HTMLSelectElement>('[data-testid="free-web-image-default"]').element.value).toBe('gpt-image-2')
+    wrapper.unmount()
+  })
+
+  it('requires consent and an authorized default when image entries remain', async () => {
+    const account = freeAccount()
+    account.extra.chatgpt_web_image_regular_chat = false
+    const wrapper = mountModal(account)
+    expect(wrapper.find('[data-testid="free-web-image-consent-required"]').exists()).toBe(true)
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    expect(updateAccountMock).not.toHaveBeenCalled()
+    await wrapper.get('[data-testid="free-web-image-regular-chat"]').setValue(true)
+    wrapper.getComponent(ModelWhitelistSelectorStub).vm.$emit('update:modelValue', ['gpt-6-luna'])
+    await flushPromises()
+    expect(wrapper.find('[data-testid="free-web-image-invalid-default"]').exists()).toBe(true)
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    expect(updateAccountMock).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('allows clearing every image entry without silently adding the default back', async () => {
+    const account = freeAccount()
+    delete account.credentials.model_mapping.illustration
+    const wrapper = mountModal(account)
+    wrapper.getComponent(ModelWhitelistSelectorStub).vm.$emit('update:modelValue', [])
+    await flushPromises()
+    expect(wrapper.find('[data-testid="free-web-image-no-models"]').exists()).toBe(true)
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    expect(updateAccountMock.mock.calls[0][1].credentials.model_mapping ?? {}).toEqual({})
+    expect(updateAccountMock.mock.calls[0][1].extra.chatgpt_web_image_enabled).toBe(true)
     wrapper.unmount()
   })
 })

@@ -220,4 +220,64 @@ describe('AccountTestModal', () => {
       mode: 'compact'
     })
   })
+
+  function freeAccount(extra: Record<string, unknown> = {}) {
+    return { id: 42, name: 'Free images', platform: 'openai', type: 'oauth', status: 'active', credentials: { plan_type: 'free', model_mapping: { illustration: 'gpt-image-2.5-flare', 'gpt-image-2': 'gpt-image-2' } }, extra: { chatgpt_web_image_enabled: true, chatgpt_web_image_regular_chat: true, ...extra } }
+  }
+
+  it('Free 图片别名走网页并标明兼容入口，每次点击测试使用新的 operation_id', async () => {
+    getAvailableModels.mockResolvedValue([{ id: 'illustration', display_name: 'illustration' }])
+    global.fetch = vi.fn().mockImplementation(async () => createStreamResponse([
+      'data: {"type":"test_start","provider":"chatgpt_web","model":"illustration","capability_only":true}\n',
+      'data: {"type":"image","provider":"chatgpt_web","image_url":"data:image/png;base64,QUJD","mime_type":"image/png"}\n',
+      'data: {"type":"test_complete","success":true}\n'
+    ]))
+    const wrapper = mountModal(freeAccount())
+    await wrapper.setProps({ show: true })
+    await flushPromises()
+    expect(wrapper.get('[data-testid="free-web-image-test-path"]').text()).toContain('admin.accounts.openai.webImageTestHint')
+    expect((wrapper.vm as any).modelOptionsForMode[0].display_name).toContain('admin.accounts.openai.webImageEntryBadge')
+    ;(wrapper.vm as any).testMode = 'compact'
+    await wrapper.get('textarea.textarea-stub').setValue('draw an orange circle')
+    await (wrapper.vm as any).startTest()
+    await flushPromises()
+    const first = JSON.parse((global.fetch as any).mock.calls[0][1].body)
+    expect(first).toMatchObject({ model_id: 'illustration', mode: 'default', prompt: 'draw an orange circle' })
+    expect(first.operation_id).toEqual(expect.any(String))
+    expect(first.operation_id.length).toBeGreaterThan(10)
+    expect(wrapper.text()).toContain('admin.accounts.openai.webImageCompatibleEntry')
+    expect(wrapper.text()).toContain('admin.accounts.openai.webImageTestPath')
+    expect(wrapper.text()).not.toContain('admin.accounts.usingModel')
+    expect(wrapper.find('img[alt="test-image-1"]').attributes('src')).toBe('data:image/png;base64,QUJD')
+    await (wrapper.vm as any).startTest()
+    const second = JSON.parse((global.fetch as any).mock.calls[1][1].body)
+    expect(second.operation_id).not.toBe(first.operation_id)
+    wrapper.unmount()
+  })
+
+  it.each([{ chatgpt_web_image_enabled: false }, { chatgpt_web_image_regular_chat: false }])('Free 图片缺少开关或普通会话许可时禁用测试：%o', async extra => {
+    getAvailableModels.mockResolvedValue([{ id: 'gpt-image-2', display_name: 'gpt-image-2' }])
+    const wrapper = mountModal(freeAccount(extra))
+    await wrapper.setProps({ show: true })
+    await flushPromises()
+    expect(wrapper.find('[data-testid="free-web-image-test-disabled"]').exists()).toBe(true)
+    expect((wrapper.vm as any).canStartTest).toBe(false)
+    await (wrapper.vm as any).startTest()
+    expect(global.fetch).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('Free 空模型映射不代表允许网页图片', async () => {
+    getAvailableModels.mockResolvedValue([{ id: 'gpt-image-2', display_name: 'gpt-image-2' }])
+    const account = freeAccount()
+    account.credentials.model_mapping = {} as any
+    const wrapper = mountModal(account)
+    await wrapper.setProps({ show: true })
+    await flushPromises()
+    expect(wrapper.find('[data-testid="free-web-image-test-disabled"]').exists()).toBe(true)
+    await (wrapper.vm as any).startTest()
+    expect(global.fetch).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
 })

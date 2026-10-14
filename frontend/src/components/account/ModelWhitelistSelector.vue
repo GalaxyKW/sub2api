@@ -15,6 +15,7 @@
             <span class="flex items-center gap-1 truncate">
               <ModelIcon :model="model" size="14px" />
               <span class="truncate">{{ model }}</span>
+              <span v-if="isWebImageOption(model)" class="shrink-0 text-[10px] text-emerald-700 dark:text-emerald-300">{{ t('admin.accounts.openai.webImageEntryBadge') }}</span>
             </span>
             <button
               type="button"
@@ -73,6 +74,7 @@
               </span>
               <ModelIcon :model="model.value" size="18px" />
               <span class="truncate text-gray-900 dark:text-white">{{ model.value }}</span>
+              <span v-if="isWebImageOption(model.value)" class="shrink-0 text-[10px] text-emerald-700 dark:text-emerald-300">{{ t('admin.accounts.openai.webImageEntryBadge') }}</span>
             </button>
             <button
               type="button"
@@ -161,6 +163,7 @@ const { t } = useI18n()
 
 const props = defineProps<{
   modelValue: string[]
+  webImageCompatibility?: boolean
   modelMappings?: { from: string; to: string }[]
   platform?: string
   platforms?: string[]
@@ -180,6 +183,12 @@ const emit = defineEmits<{
 
 const appStore = useAppStore()
 const { copyToClipboard } = useClipboard()
+
+const isWebImageOption = (model: string) => {
+  if (!props.webImageCompatibility) return false
+  const explicit = props.modelMappings?.find(mapping => mapping.from.trim() === model)
+  return (explicit?.to.trim() || model).toLowerCase().startsWith('gpt-image-')
+}
 
 const showDropdown = ref(false)
 const searchQuery = ref('')

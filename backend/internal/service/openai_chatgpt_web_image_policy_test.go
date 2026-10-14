@@ -1,0 +1,135 @@
+package service
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
+	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/require"
+)
+
+func webImagePolicyAccount(mapping map[string]any) *Account {
+	return &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth,
+		Credentials: map[string]any{"plan_type": "free", "model_mapping": mapping},
+		Extra:       map[string]any{AccountExtraChatGPTWebImageEnabled: true, AccountExtraChatGPTWebImageRegularChat: true}}
+}
+
+func TestChatGPTWebImageModelRequiresExplicitImageMapping(t *testing.T) {
+	cases := []struct {
+		name, requested, configured, want string
+		mapping                           map[string]any
+	}{
+		{"default", "", "", "gpt-image-2", map[string]any{"gpt-image-2": "gpt-image-2"}},
+		{"configured_alias", "", "poster", "gpt-image-1.5", map[string]any{"poster": "gpt-image-1.5"}},
+		{"explicit_beats_default", "gpt-image-1", "gpt-image-2", "gpt-image-1", map[string]any{"gpt-image-1": "gpt-image-1"}},
+		{"wildcard", "gpt-image-2.5-flare", "", "gpt-image-2", map[string]any{"gpt-image-*": "gpt-image-2"}},
+		{"alias_25_is_only_compatibility", "picture", "", "gpt-image-2.5-flare", map[string]any{"picture": "gpt-image-2.5-flare"}},
+		{"no_mapping", "", "", "", nil},
+		{"text_only", "", "", "", map[string]any{"gpt-6-luna": "gpt-6-luna"}},
+		{"explicit_does_not_use_default", "gpt-image-1", "", "", map[string]any{"gpt-image-2": "gpt-image-2"}},
+		{"image_name_mapped_to_text", "gpt-image-2", "", "", map[string]any{"gpt-image-2": "gpt-6-luna"}},
+		{"wildcard_target_is_literal", "gpt-image-2", "", "", map[string]any{"*": "*"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			a := webImagePolicyAccount(tc.mapping)
+			a.Extra[AccountExtraChatGPTWebImageDefaultModel] = tc.configured
+			resolved, err := resolveChatGPTWebImageModel(a, tc.requested)
+			if tc.want == "" {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tc.want, resolved.MappedModel)
+			if tc.requested != "" {
+				require.Equal(t, tc.requested, resolved.RequestedModel)
+			}
+		})
+	}
+	// Provider opt-in must not narrow existing unrestricted text semantics.
+	a := webImagePolicyAccount(nil)
+	require.True(t, a.IsModelSupported("gpt-6-luna"))
+	_, err := resolveChatGPTWebImageModel(a, "gpt-image-2")
+	require.Error(t, err)
+	a = webImagePolicyAccount(map[string]any{"gpt-image-2": "gpt-image-2"})
+	a.Extra[AccountExtraChatGPTWebImageEnabled] = false
+	_, err = resolveChatGPTWebImageModel(a, "gpt-image-2")
+	require.Error(t, err)
+}
+
+func TestWebImageResponsesModelPolicyAndOrdinaryChat(t *testing.T) {
+	cases := []struct {
+		name, body             string
+		mapping                map[string]any
+		group, wantImage, fail bool
+	}{
+		{"default_allowed", `{"model":"gpt-6-luna","input":"draw"}`, map[string]any{"gpt-image-2": "gpt-image-2"}, true, true, false},
+		{"default_denied_plain_chat", `{"model":"gpt-6-luna","previous_response_id":"resp_text","input":"hello"}`, map[string]any{"gpt-6-luna": "gpt-6-luna"}, true, false, false},
+		{"no_mapping_plain_chat", `{"model":"gpt-6-luna","input":"hello"}`, nil, true, false, false},
+		{"group_off_plain_chat", `{"model":"gpt-6-luna","input":"hello"}`, map[string]any{"gpt-image-2": "gpt-image-2"}, false, false, false},
+		{"explicit_allowed_default_denied", `{"model":"gpt-6-luna","tools":[{"type":"image_generation","model":"poster"}]}`, map[string]any{"poster": "gpt-image-1"}, true, true, false},
+		{"explicit_denied_default_allowed", `{"model":"gpt-6-luna","tools":[{"type":"image_generation","model":"gpt-image-1"}]}`, map[string]any{"gpt-image-2": "gpt-image-2"}, true, false, false},
+		{"declared_group_off", `{"model":"gpt-6-luna","tools":[{"type":"image_generation","model":"gpt-image-2","action":"edit","quality":"high"}]}`, map[string]any{"gpt-image-2": "gpt-image-2"}, false, false, false},
+		{"forced_group_off", `{"model":"gpt-6-luna","tools":[{"type":"image_generation","model":"gpt-image-2"}],"tool_choice":{"type":"image_generation"}}`, map[string]any{"gpt-image-2": "gpt-image-2"}, false, false, true},
+		{"forced_model_denied", `{"model":"gpt-6-luna","tools":[{"type":"image_generation","model":"gpt-image-1"}],"tool_choice":{"type":"image_generation"}}`, map[string]any{"gpt-image-2": "gpt-image-2"}, true, false, true},
+		{"required_image_only_denied", `{"model":"gpt-6-luna","tools":[{"type":"namespace","name":"image_gen","tools":[]}],"tool_choice":"required"}`, nil, true, false, true},
+		{"required_additional_image_only_denied", `{"model":"gpt-6-luna","input":[{"type":"additional_tools","tools":[{"type":"image_generation","model":"gpt-image-1"}]}],"tool_choice":"required"}`, map[string]any{"gpt-image-2": "gpt-image-2"}, true, false, true},
+		{"additional_edit_rejected", `{"model":"gpt-6-luna","input":[{"type":"additional_tools","tools":[{"type":"image_generation","model":"gpt-image-2","action":"edit"}]}]}`, map[string]any{"gpt-image-2": "gpt-image-2"}, true, false, true},
+		{"additional_quality_rejected", `{"model":"gpt-6-luna","input":[{"type":"additional_tools","tools":[{"type":"image_generation","model":"gpt-image-2","quality":"high"}]}]}`, map[string]any{"gpt-image-2": "gpt-image-2"}, true, false, true},
+		{"denied_additional_edit_keeps_chat", `{"model":"gpt-6-luna","input":[{"type":"additional_tools","tools":[{"type":"image_generation","model":"gpt-image-2","action":"edit","quality":"high"}]}]}`, nil, true, false, false},
+		{"explicit_wrong_type", `{"model":"gpt-6-luna","tools":[{"type":"image_generation","model":42}]}`, map[string]any{"gpt-image-2": "gpt-image-2"}, true, false, true},
+		{"ambiguous_models", `{"tools":[{"type":"image_generation","model":"gpt-image-1"},{"type":"image_generation","model":"gpt-image-2"}]}`, map[string]any{"gpt-image-*": "gpt-image-2"}, true, false, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			prepared, model, err := prepareWebImageResponsesForAccount([]byte(tc.body), webImagePolicyAccount(tc.mapping), tc.group)
+			if tc.fail {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tc.wantImage, model != nil)
+			var got map[string]any
+			require.NoError(t, json.Unmarshal(prepared, &got))
+			tools := got["tools"].([]any)
+			if tc.wantImage {
+				require.Len(t, tools, 1)
+				require.Equal(t, webImageFunctionName, tools[0].(map[string]any)["name"])
+			} else {
+				require.Empty(t, tools)
+				require.NotContains(t, got["instructions"], "supplies the server-side")
+			}
+		})
+	}
+}
+
+func TestWebImageDisabledRequiredToolCanStillSelectTextTool(t *testing.T) {
+	body := []byte(`{"model":"gpt-6-luna","tool_choice":"required","tools":[{"type":"image_generation","model":"gpt-image-2"}],"input":[{"type":"additional_tools","tools":[{"type":"function","name":"clock"}]}]}`)
+	prepared, selected, err := prepareWebImageResponsesForAccount(body, webImagePolicyAccount(nil), true)
+	require.NoError(t, err)
+	require.Nil(t, selected)
+	require.NotContains(t, string(prepared), `"type":"image_generation"`)
+	require.Contains(t, string(prepared), `"name":"clock"`)
+	require.Contains(t, string(prepared), `"tool_choice":"required"`)
+}
+
+func TestWebImageDisabledPreservesTextToolsAndCleansBridgeHistory(t *testing.T) {
+	a := webImagePolicyAccount(map[string]any{"gpt-image-2": "gpt-image-2"})
+	a.Extra[AccountExtraChatGPTWebImageEnabled] = false
+	body := []byte(`{"model":"gpt-6-luna","tools":[{"type":"function","name":"exec_command"},{"type":"namespace","name":"image_gen","tools":[]}],"input":[{"type":"additional_tools","tools":[{"type":"namespace","name":"image_gen","tools":[]},{"type":"function","name":"clock"}]},{"type":"image_generation_call","id":"ig_web_prior","result":"private-png"},{"role":"assistant","content":[{"type":"output_text","text":"![Generated image](data:image/jpeg;base64,AAAA)"}]},{"role":"user","content":"hello"}]}`)
+	prepared, selected, err := prepareWebImageResponsesForAccount(body, a, true)
+	require.NoError(t, err)
+	require.Nil(t, selected)
+	require.NotContains(t, string(prepared), "private-png")
+	require.NotContains(t, string(prepared), "data:image/")
+	require.NotContains(t, string(prepared), `"name":"image_gen"`)
+	require.Contains(t, string(prepared), `"name":"exec_command"`)
+	require.Contains(t, string(prepared), `"name":"clock"`)
+	// Disabled Free must still enter the adapter, preventing a hosted fallback.
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	require.True(t, shouldBridgeChatGPTWebResponses(context.Background(), c, a))
+}
