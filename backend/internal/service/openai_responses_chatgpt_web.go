@@ -35,12 +35,14 @@ var webImagePreviewPattern = regexp.MustCompile(`!\[Generated image\]\(data:imag
 
 type webImageBridgeContextKey struct{}
 
-func shouldBridgeChatGPTWebResponses(ctx context.Context, c *gin.Context, account *Account) bool {
-	if ctx.Value(webImageBridgeContextKey{}) != nil || (!isFreeChatGPTWebImageAccount(account) && !chatGPTWebImageEnabled(account)) || isOpenAIResponsesCompactPath(c) {
+// ShouldBridgeChatGPTWebResponses reports whether this request uses the opted-in
+// web image policy, including cleanup for explicitly disabled Free accounts.
+func ShouldBridgeChatGPTWebResponses(ctx context.Context, c *gin.Context, account *Account) bool {
+	if ctx.Value(webImageBridgeContextKey{}) != nil || !UsesChatGPTWebImagePolicy(account) || isOpenAIResponsesCompactPath(c) {
 		return false
 	}
-	// Even when disabled, Free accounts pass through this adapter to remove
-	// image-only history and prevent fallback to the legacy hosted image tool.
+	// Explicitly disabled Free accounts still clean up bridge history and image
+	// tools. Unconfigured accounts keep the original Hosted/Responses path.
 	return true
 }
 

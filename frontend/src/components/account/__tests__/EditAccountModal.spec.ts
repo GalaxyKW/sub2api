@@ -2085,6 +2085,43 @@ describe('EditAccountModal Free web image settings', () => {
     wrapper.unmount()
   })
 
+  it('preserves an unconfigured Free account during ordinary edits and resets touched state on reopen', async () => {
+    const account = freeAccount()
+    delete account.extra.chatgpt_web_image_enabled
+    delete account.extra.chatgpt_web_image_regular_chat
+    account.extra.codex_image_generation_bridge = true
+    const wrapper = mountModal(account)
+    expect(wrapper.find('[data-testid="free-web-image-unconfigured"]').exists()).toBe(true)
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    const payload = updateAccountMock.mock.calls[0][1]
+    expect(payload.extra).toMatchObject({ unrelated_setting: 'keep', codex_image_generation_bridge: true })
+    expect(Object.keys(payload.extra).filter(key => key.startsWith('chatgpt_web_image_'))).toEqual([])
+
+    await wrapper.get('[data-testid="free-web-image-enabled"]').setValue(true)
+    await wrapper.get('[data-testid="free-web-image-enabled"]').setValue(false)
+    expect(wrapper.find('[data-testid="free-web-image-off"]').exists()).toBe(true)
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    expect(updateAccountMock.mock.calls[1][1].extra.chatgpt_web_image_enabled).toBe(false)
+
+    await wrapper.setProps({ show: false })
+    await wrapper.setProps({ show: true, account: { ...account } })
+    expect(wrapper.find('[data-testid="free-web-image-unconfigured"]').exists()).toBe(true)
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    expect(updateAccountMock.mock.calls[2][1].extra).not.toHaveProperty('chatgpt_web_image_enabled')
+    wrapper.unmount()
+  })
+
+  it('persists an explicit disabled flag during ordinary edits', async () => {
+    const account = freeAccount()
+    account.extra.chatgpt_web_image_enabled = false
+    const wrapper = mountModal(account)
+    expect(wrapper.find('[data-testid="free-web-image-off"]').exists()).toBe(true)
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    expect(updateAccountMock.mock.calls[0][1].extra.chatgpt_web_image_enabled).toBe(false)
+    wrapper.unmount()
+  })
+
   it('persists off independently of Hosted policy and retains settings when toggled back on', async () => {
     const account = freeAccount()
     account.extra.codex_image_generation_bridge = true

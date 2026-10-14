@@ -381,7 +381,7 @@ import { buildApiUrl } from '@/api/client'
 import { ADMIN_UI_REQUEST_HEADER } from '@/api/adminUIRequest'
 import { adminAPI } from '@/api/admin'
 import type { Account, ClaudeModel } from '@/types'
-import { isFreeWebImageAccount, readWebImageSettings, resolveWebImageAlias } from '@/components/account/webImageBridge'
+import { hasWebImageConfiguration, isFreeWebImageAccount, isOpenAIImageTestModel, readWebImageSettings, resolveWebImageAlias } from '@/components/account/webImageBridge'
 
 const { t } = useI18n()
 const { copyToClipboard } = useClipboard()
@@ -451,13 +451,11 @@ const supportsGeminiImageTest = computed(() => {
   return props.account?.platform === 'gemini' || (props.account?.platform === 'antigravity' && props.account?.type === 'apikey')
 })
 
-const supportsOpenAIImageTest = computed(() => {
-  const modelID = selectedModelId.value.toLowerCase()
-  return props.account?.platform === 'openai' && (modelID.startsWith('gpt-image-') ||
-    resolveWebImageAlias(props.account.credentials?.model_mapping, selectedModelId.value) !== null)
-})
+const supportsOpenAIImageTest = computed(() => props.account?.platform === 'openai' &&
+  isOpenAIImageTestModel(props.account.credentials?.model_mapping, selectedModelId.value))
 
-const isFreeWebImageTest = computed(() => isFreeWebImageAccount(props.account) && supportsOpenAIImageTest.value)
+const hasFreeWebImagePolicy = computed(() => isFreeWebImageAccount(props.account) && hasWebImageConfiguration(props.account?.extra))
+const isFreeWebImageTest = computed(() => hasFreeWebImagePolicy.value && supportsOpenAIImageTest.value)
 const webImageTestBlocked = computed(() => {
   if (!isFreeWebImageTest.value) return false
   const settings = readWebImageSettings(props.account?.extra)
@@ -783,8 +781,8 @@ const loadAvailableModels = async () => {
   selectedModelId.value = '' // Reset selection before loading
   try {
     const fetchedModels = await adminAPI.accounts.getAvailableModels(props.account.id)
-    const models = fetchedModels.map(model => isFreeWebImageAccount(props.account) &&
-      (model.id.toLowerCase().startsWith('gpt-image-') || resolveWebImageAlias(props.account?.credentials?.model_mapping, model.id) !== null)
+    const models = fetchedModels.map(model => hasFreeWebImagePolicy.value &&
+      isOpenAIImageTestModel(props.account?.credentials?.model_mapping, model.id)
       ? { ...model, display_name: `${model.display_name || model.id} · ${t('admin.accounts.openai.webImageEntryBadge')}` }
       : model)
     availableModels.value = props.account.platform === 'gemini' || props.account.platform === 'antigravity'

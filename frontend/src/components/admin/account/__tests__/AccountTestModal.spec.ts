@@ -255,6 +255,43 @@ describe('AccountTestModal', () => {
     wrapper.unmount()
   })
 
+  it('未配置桥接的 Free 账号保留原有图片测试，不显示网页标识或禁用测试', async () => {
+    getAvailableModels.mockResolvedValue([{ id: 'gpt-image-2', display_name: 'GPT Image 2' }])
+    global.fetch = vi.fn().mockResolvedValue(createStreamResponse(['data: {"type":"test_complete","success":true}\n']))
+    const account = freeAccount()
+    delete (account.extra as Record<string, unknown>).chatgpt_web_image_enabled
+    const wrapper = mountModal(account)
+    await wrapper.setProps({ show: true })
+    await flushPromises()
+    expect(wrapper.find('[data-testid="free-web-image-test-path"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="free-web-image-test-disabled"]').exists()).toBe(false)
+    expect((wrapper.vm as any).modelOptionsForMode[0].display_name).toBe('GPT Image 2')
+    expect((wrapper.vm as any).canStartTest).toBe(true)
+    await (wrapper.vm as any).startTest()
+    expect(global.fetch).toHaveBeenCalledTimes(1)
+    expect(JSON.parse((global.fetch as any).mock.calls[0][1].body)).toMatchObject({ model_id: 'gpt-image-2', mode: 'default' })
+    wrapper.unmount()
+  })
+
+  it('图片名称显式映射为文本时保留普通测试，不展示网页图片标识或阻断', async () => {
+    getAvailableModels.mockResolvedValue([{ id: 'gpt-image-custom', display_name: 'Text alias' }])
+    global.fetch = vi.fn().mockResolvedValue(createStreamResponse(['data: {"type":"test_complete","success":true}\n']))
+    const account = freeAccount()
+    account.credentials.model_mapping = { 'gpt-image-custom': 'gpt-5.1' } as any
+    const wrapper = mountModal(account)
+    await wrapper.setProps({ show: true })
+    await flushPromises()
+    expect(wrapper.find('[data-testid="free-web-image-test-path"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="free-web-image-test-disabled"]').exists()).toBe(false)
+    expect((wrapper.vm as any).supportsOpenAIImageTest).toBe(false)
+    expect((wrapper.vm as any).modelOptionsForMode[0].display_name).toBe('Text alias')
+    expect((wrapper.vm as any).canStartTest).toBe(true)
+    ;(wrapper.vm as any).testMode = 'compact'
+    await (wrapper.vm as any).startTest()
+    expect(JSON.parse((global.fetch as any).mock.calls[0][1].body)).toMatchObject({ model_id: 'gpt-image-custom', mode: 'compact' })
+    wrapper.unmount()
+  })
+
   it.each([{ chatgpt_web_image_enabled: false }, { chatgpt_web_image_regular_chat: false }])('Free 图片缺少开关或普通会话许可时禁用测试：%o', async extra => {
     getAvailableModels.mockResolvedValue([{ id: 'gpt-image-2', display_name: 'gpt-image-2' }])
     const wrapper = mountModal(freeAccount(extra))

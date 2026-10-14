@@ -1925,7 +1925,9 @@
 
       <FreeWebImageSettings
         v-if="isFreeWebImageEligible"
-        v-model:enabled="webImageEnabled"
+        :enabled="webImageEnabled"
+        :configured="webImageConfigured"
+        @update:enabled="setWebImageEnabled"
         v-model:regular-chat="webImageRegularChat"
         v-model:markdown-preview="webImageMarkdownPreview"
         v-model:default-model="webImageDefaultModel"
@@ -3270,7 +3272,7 @@ import ProxyAdBanner from '@/components/common/ProxyAdBanner.vue'
 import GroupSelector from '@/components/common/GroupSelector.vue'
 import ModelWhitelistSelector from '@/components/account/ModelWhitelistSelector.vue'
 import FreeWebImageSettings from '@/components/account/FreeWebImageSettings.vue'
-import { DEFAULT_WEB_IMAGE_MODEL, readWebImageSettings, webImageModelOptions } from '@/components/account/webImageBridge'
+import { DEFAULT_WEB_IMAGE_MODEL, hasWebImageConfiguration, readWebImageSettings, webImageModelOptions } from '@/components/account/webImageBridge'
 import QuotaLimitCard from '@/components/account/QuotaLimitCard.vue'
 import GrokBaseUrlPresets from '@/components/account/GrokBaseUrlPresets.vue'
 import CnBaseUrlPresets from '@/components/account/CnBaseUrlPresets.vue'
@@ -3874,6 +3876,12 @@ const codexFingerprintMode = ref<CodexFingerprintMode>('off')
 type CodexImageToolMode = 'inherit' | 'enabled' | 'disabled' | 'block'
 const codexImageToolMode = ref<CodexImageToolMode>('inherit')
 const webImageEnabled = ref(false)
+const webImageTouched = ref(false)
+const webImageConfigured = computed(() => hasWebImageConfiguration(props.account?.extra) || webImageTouched.value)
+function setWebImageEnabled(enabled: boolean) {
+  webImageTouched.value = true
+  webImageEnabled.value = enabled
+}
 const webImageRegularChat = ref(false)
 const webImageMarkdownPreview = ref(true)
 const webImageDefaultModel = ref(DEFAULT_WEB_IMAGE_MODEL)
@@ -4376,6 +4384,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   codexCLIOnlyAppServerEnabled.value = false
   codexFingerprintMode.value = 'off'
   codexImageToolMode.value = 'inherit'
+  webImageTouched.value = false
   const webImageSettings = readWebImageSettings(extra)
   webImageEnabled.value = webImageSettings.enabled
   webImageRegularChat.value = webImageSettings.regularChat
@@ -5997,7 +6006,7 @@ const handleSubmit = async () => {
 		// 运行态只允许后端服务更新，账号编辑不得回写旧状态。
 		delete newExtra.codex_auto_reset_credit_state
 
-      if (isFreeWebImageEligible.value) {
+      if (isFreeWebImageEligible.value && webImageConfigured.value) {
         newExtra.chatgpt_web_image_enabled = webImageEnabled.value
         newExtra.chatgpt_web_image_regular_chat = webImageRegularChat.value
         newExtra.chatgpt_web_image_markdown_preview = webImageMarkdownPreview.value

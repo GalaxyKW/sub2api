@@ -94,11 +94,20 @@ func webImageJobKey(c *gin.Context, body []byte) (string, error) {
 func configuredWebImageJobStore() (*webImageJobStore, error) {
 	dir := strings.TrimSpace(os.Getenv("SUB2API_WEB_IMAGE_STATE_DIR"))
 	if dir == "" {
-		dir = "/app/data/web-image-jobs"
+		base := strings.TrimSpace(os.Getenv("DATA_DIR"))
+		if base == "" {
+			base = "/app/data"
+		}
+		var err error
+		dir, err = filepath.Abs(filepath.Join(base, "web-image-jobs"))
+		if err != nil {
+			return nil, fmt.Errorf("resolve web image state directory: %w", err)
+		}
 	}
 	if !filepath.IsAbs(dir) {
 		return nil, errors.New("web image state directory must be absolute")
 	}
+	dir = filepath.Clean(dir)
 	webImageJobStores.Lock()
 	defer webImageJobStores.Unlock()
 	if s := webImageJobStores.byPath[dir]; s != nil {
@@ -149,49 +158,46 @@ func (s *webImageJobStore) run(ctx context.Context, key string, generate func(co
 	s.mu.Lock()
 	if job := s.active[key]; job != nil {
 		s.mu.Unlock()
+		releaseWebImageRequestSlot(ctx)
 		return waitWebImageJob(ctx, job)
 	}
 	path := filepath.Join(s.dir, key+".json")
 	if info, err := os.Stat(path); err == nil && time.Since(info.ModTime()) <= webImageJobRetention {
 		record, readErr := readWebImageJob(path)
 		s.mu.Unlock()
+		releaseWebImageRequestSlot(ctx)
 		if readErr != nil || record.State != "complete" {
 			return chatgptwebimage.Result{}, webImageJobUnknown()
 		}
 		return webImageJobResult(record)
 	}
-	if err := s.makeRoom(); err != nil {
-		s.mu.Unlock()
-		return chatgptwebimage.Result{}, webImageJobUnavailable("image_job_storage_full", "Image job storage is unavailable or full; no image was requested")
-	}
-	// O_EXCL also protects against a second service process using this volume.
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
-	if err != nil {
-		s.mu.Unlock()
-		return chatgptwebimage.Result{}, webImageJobUnknown()
-	}
-	billingID := "web-image:" + uuid.NewString()
-	claim, _ := json.Marshal(webImageJobRecord{State: "pending", BillingID: billingID})
-	_, writeErr := f.Write(claim)
-	if writeErr == nil {
-		writeErr = f.Sync()
-	}
-	closeErr := f.Close()
-	if writeErr != nil || closeErr != nil {
-		s.mu.Unlock()
-		return chatgptwebimage.Result{}, webImageJobUnavailable("image_job_unavailable", "Could not persist the image job; no image was requested")
-	}
-	// Persist the directory entry too before performing the external action.
-	if err := syncWebImageJobDir(s.dir); err != nil {
-		s.mu.Unlock()
-		return chatgptwebimage.Result{}, webImageJobUnavailable("image_job_unavailable", "Could not persist the image job; no image was requested")
-	}
+	// Register before waiting for capacity so identical requests join this job
+	// without occupying another image slot. Never wait under the store lock:
+	// the job holding the last slot may need that lock to finish.
 	job := &webImageRunningJob{done: make(chan struct{})}
 	s.active[key] = job
 	s.mu.Unlock()
+	release, err := takeWebImageGenerationSlot(ctx)
+	if err != nil {
+		s.finish(key, job, webImageJobRecord{Error: chatGPTWebImagePublicError(err)})
+		return chatgptwebimage.Result{}, err
+	}
+	// Before a durable claim exists, a cancelled request must not start work.
+	if err := ctx.Err(); err != nil {
+		release()
+		s.finish(key, job, webImageJobRecord{Error: chatGPTWebImagePublicError(err)})
+		return chatgptwebimage.Result{}, err
+	}
+	billingID, err := s.claim(key)
+	if err != nil {
+		release()
+		s.finish(key, job, webImageJobRecord{Error: chatGPTWebImagePublicError(err)})
+		return chatgptwebimage.Result{}, err
+	}
 	jobCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Minute)
 	go func() {
 		defer cancel()
+		defer release()
 		record := webImageJobRecord{State: "complete", BillingID: billingID}
 		// A panic leaves the durable pending claim intact and safely prevents
 		// regeneration; it must not crash the whole gateway goroutine.
@@ -202,11 +208,7 @@ func (s *webImageJobStore) run(ctx context.Context, key string, generate func(co
 			if err := writeWebImageJob(path, record); err != nil {
 				record = webImageJobRecord{State: "complete", BillingID: billingID, Error: webImageJobUnknown()}
 			}
-			s.mu.Lock()
-			job.record = record
-			close(job.done)
-			delete(s.active, key)
-			s.mu.Unlock()
+			s.finish(key, job, record)
 		}()
 		result, err := generate(jobCtx)
 		if err != nil {
@@ -218,6 +220,43 @@ func (s *webImageJobStore) run(ctx context.Context, key string, generate func(co
 		}
 	}()
 	return waitWebImageJob(ctx, job)
+}
+
+func (s *webImageJobStore) finish(key string, job *webImageRunningJob, record webImageJobRecord) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	job.record = record
+	close(job.done)
+	delete(s.active, key)
+}
+
+func (s *webImageJobStore) claim(key string) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.makeRoom(); err != nil {
+		return "", webImageJobUnavailable("image_job_storage_full", "Image job storage is unavailable or full; no image was requested")
+	}
+	// O_EXCL also protects against a second service process using this volume.
+	path := filepath.Join(s.dir, key+".json")
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if err != nil {
+		return "", webImageJobUnknown()
+	}
+	billingID := "web-image:" + uuid.NewString()
+	claim, _ := json.Marshal(webImageJobRecord{State: "pending", BillingID: billingID})
+	_, writeErr := f.Write(claim)
+	if writeErr == nil {
+		writeErr = f.Sync()
+	}
+	closeErr := f.Close()
+	if writeErr != nil || closeErr != nil {
+		return "", webImageJobUnavailable("image_job_unavailable", "Could not persist the image job; no image was requested")
+	}
+	// Persist the directory entry too before performing the external action.
+	if err := syncWebImageJobDir(s.dir); err != nil {
+		return "", webImageJobUnavailable("image_job_unavailable", "Could not persist the image job; no image was requested")
+	}
+	return billingID, nil
 }
 
 func waitWebImageJob(ctx context.Context, job *webImageRunningJob) (chatgptwebimage.Result, error) {

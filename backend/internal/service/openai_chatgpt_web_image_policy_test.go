@@ -131,5 +131,37 @@ func TestWebImageDisabledPreservesTextToolsAndCleansBridgeHistory(t *testing.T) 
 	// Disabled Free must still enter the adapter, preventing a hosted fallback.
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
-	require.True(t, shouldBridgeChatGPTWebResponses(context.Background(), c, a))
+	require.True(t, ShouldBridgeChatGPTWebResponses(context.Background(), c, a))
+}
+
+func TestWebImageResponsesUnconfiguredAccountsPreserveUpstreamPath(t *testing.T) {
+	cases := []struct {
+		name  string
+		plan  string
+		extra map[string]any
+		want  bool
+	}{
+		{"absent_free", "free", nil, false},
+		{"empty_free", "free", map[string]any{}, false},
+		{"invalid_free", "free", map[string]any{AccountExtraChatGPTWebImageEnabled: "true"}, false},
+		{"enabled_free", "free", map[string]any{AccountExtraChatGPTWebImageEnabled: true}, true},
+		{"disabled_free", "free", map[string]any{AccountExtraChatGPTWebImageEnabled: false}, true},
+		{"absent_pro", "pro", nil, false},
+		{"disabled_pro", "pro", map[string]any{AccountExtraChatGPTWebImageEnabled: false}, false},
+		{"enabled_pro_is_validated", "pro", map[string]any{AccountExtraChatGPTWebImageEnabled: true}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			a := webImagePolicyAccount(nil)
+			a.Credentials["plan_type"] = tc.plan
+			a.Extra = tc.extra
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+			require.Equal(t, tc.want, ShouldBridgeChatGPTWebResponses(context.Background(), c, a))
+			ctx := context.WithValue(context.Background(), webImageBridgeContextKey{}, true)
+			require.False(t, ShouldBridgeChatGPTWebResponses(ctx, c, a), "nested forwarding cannot enter twice")
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses/compact", nil)
+			require.False(t, ShouldBridgeChatGPTWebResponses(context.Background(), c, a))
+		})
+	}
 }

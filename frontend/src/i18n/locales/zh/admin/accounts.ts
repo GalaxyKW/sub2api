@@ -841,6 +841,7 @@ export default {
         webImageInvalidDefault: '默认兼容入口尚未允许。请选择一个已允许的图片入口，或关闭网页生图桥接后保存。',
         webImageConsentRequired: '启用前请确认允许创建普通网页会话。',
         webImageReady: '默认入口已允许；保存后可在聊天中请求生图。',
+        webImageUnconfigured: '尚未配置；保留原有生图路径和 Hosted 策略。',
         webImageOff: '网页生图已关闭；不会自动改走 Free 账号的 Hosted 生图。',
         webImageTestHint: '此测试通过 ChatGPT 网页生图。所选模型是兼容入口，实际图片模型由网页自动选择。',
         webImageTestDisabled: '该图片入口尚不可用：请检查网页生图开关、普通会话许可和账号允许的图片模型。',

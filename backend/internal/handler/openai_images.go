@@ -103,13 +103,8 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 		h.openAISecurityAuditError(c, decision)
 		return
 	}
-	imageReleaseFunc, acquired := h.acquireImageGenerationSlot(c, streamStarted)
-	if !acquired {
-		return
-	}
-	if imageReleaseFunc != nil {
-		defer imageReleaseFunc()
-	}
+	imageSlot := h.bindImageGenerationSlot(c)
+	defer imageSlot.Release()
 
 	setOpsRequestContext(c, clientRequestModel, parsed.Stream)
 	setOpsEndpointContext(c, "", int16(service.RequestTypeFromLegacy(parsed.Stream, false)))
@@ -247,6 +242,13 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 			return
 		}
 
+		if !service.UsesChatGPTWebImagePolicy(account) && !h.acquireImageRequestSlot(c, imageSlot, streamStarted) {
+			if accountReleaseFunc != nil {
+				accountReleaseFunc()
+			}
+			return
+		}
+
 		service.SetOpsLatencyMs(c, service.OpsRoutingLatencyMsKey, time.Since(routingStart).Milliseconds())
 		if !parsed.Stream && !jsonKeepaliveStarted {
 			stopJSONKeepalive = service.StartOpenAIImagesJSONKeepalive(c, h.openAIImagesJSONKeepaliveInterval())
@@ -256,6 +258,7 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 		writerSizeBeforeForward := service.OpenAIImagesJSONKeepaliveAdjustedWrittenSize(c)
 		result, err := func() (*service.OpenAIForwardResult, error) {
 			defer func() {
+				imageSlot.Release()
 				if accountReleaseFunc != nil {
 					accountReleaseFunc()
 				}

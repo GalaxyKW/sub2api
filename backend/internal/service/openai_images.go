@@ -607,7 +607,7 @@ func (s *OpenAIGatewayService) ForwardImages(
 	if parsed == nil {
 		return nil, fmt.Errorf("parsed images request is required")
 	}
-	if isFreeChatGPTWebImageAccount(account) || chatGPTWebImageEnabled(account) {
+	if UsesChatGPTWebImagePolicy(account) {
 		c.Set(chatGPTWebImageRequestContextKey, true)
 		return s.forwardChatGPTWebImages(ctx, c, account, parsed, channelMappedModel)
 	}

@@ -175,7 +175,10 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 
 func (s *OpenAIGatewayService) recordUsage(ctx context.Context, input *OpenAIRecordUsageInput) error {
 	result := input.Result
-	if s.rateLimitService != nil && input.Account != nil && input.Account.Platform == PlatformOpenAI {
+	// A completed web image job is independent of Codex account health. Only
+	// ordinary Codex success may reset its consecutive 403 counter; the trusted
+	// job reference is set internally by both web image forwarding paths.
+	if result.webImageJobBilling == nil && s.rateLimitService != nil && input.Account != nil && input.Account.Platform == PlatformOpenAI {
 		s.rateLimitService.ResetOpenAI403Counter(ctx, input.Account.ID)
 	}
 

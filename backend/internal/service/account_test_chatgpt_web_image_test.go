@@ -164,6 +164,10 @@ func TestFetchOpenAIAccountModelsFreeWebImageEligibility(t *testing.T) {
 	models, err := svc.FetchOpenAIAccountModels(context.Background(), a)
 	require.NoError(t, err)
 	require.ElementsMatch(t, []string{"paint", "gpt-6-luna"}, pickerModelIDs(models))
+	delete(a.Extra, AccountExtraChatGPTWebImageEnabled)
+	models, err = svc.FetchOpenAIAccountModels(context.Background(), a)
+	require.NoError(t, err)
+	require.ElementsMatch(t, []string{"paint", "gpt-6-luna"}, pickerModelIDs(models), "unconfigured Free keeps the original image picker")
 	a.Extra[AccountExtraChatGPTWebImageEnabled] = false
 	models, err = svc.FetchOpenAIAccountModels(context.Background(), a)
 	require.NoError(t, err)
@@ -182,5 +186,23 @@ func TestAccountTestChatGPTWebImageRejectsInvalidResult(t *testing.T) {
 	require.NoError(t, validateAccountTestWebImageResult(chatgptwebimage.Result{Images: []chatgptwebimage.Image{valid}}))
 	for _, images := range [][]chatgptwebimage.Image{nil, {valid, valid}, {{Format: "png"}}, {{Format: "jpeg", Bytes: valid.Bytes}}, {{Format: "png", Bytes: []byte("bad PNG")}}, {{Format: "png", Bytes: valid.Bytes[:len(valid.Bytes)-5]}}} {
 		require.Error(t, validateAccountTestWebImageResult(chatgptwebimage.Result{Images: images}))
+	}
+}
+
+func TestAccountTestUnconfiguredFreePreservesNativeImageTest(t *testing.T) {
+	for _, extra := range []map[string]any{nil, {}, {AccountExtraChatGPTWebImageEnabled: "true"}} {
+		a := webImageAdminTestAccount()
+		a.Extra = extra
+		delete(a.Credentials, "access_token")
+		repo := &rateLimitClearRepoStub{getByIDAccount: a}
+		svc := &AccountTestService{accountRepo: repo}
+		rec := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(rec)
+		c.Request = httptest.NewRequest(http.MethodPost, "/test", nil)
+		err := svc.TestAccountConnection(c, a.ID, "paint", "cat", "")
+		require.ErrorContains(t, err, "No access token available")
+		require.True(t, AccountTestAllowsRecovery(c), "unconfigured image tests retain the original test path")
+		require.NotContains(t, rec.Body.String(), "chatgpt_web")
+		require.Zero(t, repo.clearErrorCalls)
 	}
 }

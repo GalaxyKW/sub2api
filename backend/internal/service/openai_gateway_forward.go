@@ -57,7 +57,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		})
 		return nil, errors.New("codex_cli_only restriction: only codex official clients are allowed")
 	}
-	if shouldBridgeChatGPTWebResponses(ctx, c, account) {
+	if ShouldBridgeChatGPTWebResponses(ctx, c, account) {
 		return s.forwardChatGPTWebResponses(ctx, c, account, body)
 	}
 

@@ -115,16 +115,27 @@ func TestChatGPTWebImagesRejectUnsupportedOptionsAndPrivacyFields(t *testing.T) 
 }
 
 func TestForwardImagesChatGPTWebDisabledDoesNotFallBackToCodex(t *testing.T) {
-	for _, flag := range []any{nil, false, "true"} {
+	c, rec := webImageTestContext()
+	account := webImageTestAccount()
+	account.Extra[AccountExtraChatGPTWebImageEnabled] = false
+	_, err := (&OpenAIGatewayService{}).ForwardImages(context.Background(), c, account, nil, webImageTestRequest(), "")
+	var typed *OpenAIImagesUpstreamError
+	require.ErrorAs(t, err, &typed)
+	require.Equal(t, "chatgpt_web_image_disabled", typed.Code)
+	require.Equal(t, "chatgpt_web", rec.Header().Get("X-Sub2API-Image-Provider"))
+	require.True(t, IsChatGPTWebImageRequest(c))
+}
+
+func TestForwardImagesUnconfiguredFreePreservesCodexPath(t *testing.T) {
+	for _, extra := range []map[string]any{nil, {}, {AccountExtraChatGPTWebImageEnabled: nil}, {AccountExtraChatGPTWebImageEnabled: "true"}} {
 		c, rec := webImageTestContext()
 		account := webImageTestAccount()
-		account.Extra[AccountExtraChatGPTWebImageEnabled] = flag
+		account.Extra = extra
+		// Stop at the legacy credential boundary, before any upstream I/O.
 		_, err := (&OpenAIGatewayService{}).ForwardImages(context.Background(), c, account, nil, webImageTestRequest(), "")
-		var typed *OpenAIImagesUpstreamError
-		require.ErrorAs(t, err, &typed)
-		require.Equal(t, "chatgpt_web_image_disabled", typed.Code)
-		require.Equal(t, "chatgpt_web", rec.Header().Get("X-Sub2API-Image-Provider"))
-		require.True(t, IsChatGPTWebImageRequest(c))
+		require.ErrorContains(t, err, "access_token not found")
+		require.Empty(t, rec.Header().Get("X-Sub2API-Image-Provider"))
+		require.False(t, IsChatGPTWebImageRequest(c))
 	}
 }
 

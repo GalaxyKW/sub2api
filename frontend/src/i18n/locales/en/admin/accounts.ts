@@ -732,6 +732,7 @@ export default {
         webImageInvalidDefault: 'The default compatibility entry is not allowed. Select an allowed image entry or switch off the web image bridge before saving.',
         webImageConsentRequired: 'Confirm that regular web conversations may be created before enabling images.',
         webImageReady: 'The default entry is allowed. After saving, request an image in chat.',
+        webImageUnconfigured: 'Not configured; existing image routing and Hosted policies remain unchanged.',
         webImageOff: 'Web image generation is off; Free image requests will not fall back to Hosted generation.',
         webImageTestHint: 'This test uses ChatGPT web images. The selected model is a compatibility entry; ChatGPT web chooses the actual image model.',
         webImageTestDisabled: 'This image entry is unavailable. Check the web image switch, regular-chat permission and the account’s allowed image models.',

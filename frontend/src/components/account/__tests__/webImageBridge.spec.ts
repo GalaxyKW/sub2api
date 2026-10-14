@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isFreeWebImageAccount, readWebImageSettings, resolveWebImageAlias, webImageModelOptions } from '../webImageBridge'
+import { hasWebImageConfiguration, isFreeWebImageAccount, isOpenAIImageTestModel, readWebImageSettings, resolveWebImageAlias, webImageModelOptions } from '../webImageBridge'
 import type { Account } from '@/types'
 
 const free = { platform: 'openai', type: 'oauth', parent_account_id: null, credentials: { plan_type: ' Free ' } } as Account
@@ -12,6 +12,14 @@ describe('Free web image configuration', () => {
     }
   })
 
+  it('distinguishes explicit boolean configuration from a missing or malformed flag', () => {
+    expect(hasWebImageConfiguration()).toBe(false)
+    expect(hasWebImageConfiguration({})).toBe(false)
+    expect(hasWebImageConfiguration({ chatgpt_web_image_enabled: 'true' })).toBe(false)
+    expect(hasWebImageConfiguration({ chatgpt_web_image_enabled: true })).toBe(true)
+    expect(hasWebImageConfiguration({ chatgpt_web_image_enabled: false })).toBe(true)
+  })
+
   it('keeps absent settings disabled and uses the legacy default image entry', () => {
     expect(readWebImageSettings()).toEqual({ enabled: false, regularChat: false, markdownPreview: true, defaultModel: 'gpt-image-2' })
     expect(readWebImageSettings({ chatgpt_web_image_enabled: false, chatgpt_web_image_regular_chat: true, chatgpt_web_image_markdown_preview: false, chatgpt_web_image_default_model: ' custom-image ' })).toEqual({ enabled: false, regularChat: true, markdownPreview: false, defaultModel: 'custom-image' })
@@ -21,6 +29,14 @@ describe('Free web image configuration', () => {
     expect(webImageModelOptions({})).toEqual([])
     expect(webImageModelOptions(undefined)).toEqual([])
     expect(webImageModelOptions({ 'gpt-6-luna': 'gpt-6-luna', illustration: 'gpt-image-2.5-flare' })).toEqual(['illustration'])
+  })
+
+  it('uses the mapped target when choosing image versus text account tests', () => {
+    expect(isOpenAIImageTestModel({}, 'gpt-image-2')).toBe(true)
+    expect(isOpenAIImageTestModel({ picture: 'gpt-image-2' }, 'picture')).toBe(true)
+    expect(isOpenAIImageTestModel({ 'gpt-image-custom': 'gpt-5.1' }, 'gpt-image-custom')).toBe(false)
+    expect(isOpenAIImageTestModel({ 'gpt-image-*': 'gpt-5.1' }, 'gpt-image-custom')).toBe(false)
+    expect(isOpenAIImageTestModel({ '*': 'gpt-image-2', 'gpt-image-custom': 'gpt-5.1' }, 'gpt-image-custom')).toBe(false)
   })
 
   it('resolves exact mappings before the longest trailing wildcard', () => {

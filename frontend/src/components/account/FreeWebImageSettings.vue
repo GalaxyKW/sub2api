@@ -41,7 +41,8 @@
       <p v-else-if="!regularChat" data-testid="free-web-image-consent-required" class="text-xs text-amber-700 dark:text-amber-300">{{ t('admin.accounts.openai.webImageConsentRequired') }}</p>
       <p v-else data-testid="free-web-image-ready" class="text-xs text-emerald-700 dark:text-emerald-300">{{ t('admin.accounts.openai.webImageReady') }}</p>
     </template>
-    <p v-else data-testid="free-web-image-off" class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.accounts.openai.webImageOff') }}</p>
+    <p v-else-if="configured" data-testid="free-web-image-off" class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.accounts.openai.webImageOff') }}</p>
+    <p v-else data-testid="free-web-image-unconfigured" class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.accounts.openai.webImageUnconfigured') }}</p>
   </section>
 </template>
 
@@ -51,6 +52,7 @@ import { useI18n } from 'vue-i18n'
 const { t } = useI18n()
 defineProps<{
   enabled: boolean
+  configured: boolean
   regularChat: boolean
   markdownPreview: boolean
   defaultModel: string

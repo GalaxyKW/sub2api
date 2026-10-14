@@ -269,7 +269,7 @@ func (s *AccountTestService) FetchOpenAIAccountModels(ctx context.Context, accou
 // FilterOpenAIAccountTestModels applies web image eligibility to both discovery
 // and the local fallback picker. It leaves ordinary text/native accounts alone.
 func FilterOpenAIAccountTestModels(account *Account, models []openai.Model) []openai.Model {
-	if !isFreeChatGPTWebImageAccount(account) {
+	if !isFreeChatGPTWebImageAccount(account) || !chatGPTWebImageConfigured(account) {
 		return models
 	}
 	filtered := make([]openai.Model, 0, len(models))
@@ -840,7 +840,7 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 	// Keep the public name for the web policy check. Mapping it first would
 	// authorize a target instead of the compatibility entry selected by the admin.
 	mappedTestModel, explicitlyMapped := account.ResolveMappedModel(testModelID)
-	if isFreeChatGPTWebImageAccount(account) && (IsGPTImageGenerationModel(mappedTestModel) || (!explicitlyMapped && isOpenAIImageModel(testModelID))) {
+	if isFreeChatGPTWebImageAccount(account) && chatGPTWebImageConfigured(account) && (IsGPTImageGenerationModel(mappedTestModel) || (!explicitlyMapped && isOpenAIImageModel(testModelID))) {
 		if mode != AccountTestModeDefault {
 			return s.sendErrorAndEnd(c, "ChatGPT web image tests require the default test mode")
 		}

@@ -20,6 +20,22 @@ func isFreeChatGPTWebImageAccount(account *Account) bool {
 	return account != nil && account.IsOpenAIOAuth() && strings.EqualFold(strings.TrimSpace(account.GetCredential("plan_type")), "free")
 }
 
+// A missing flag preserves the original upstream behavior. Explicit false is
+// different: it disables web images and removes stale image tools/history.
+func chatGPTWebImageConfigured(account *Account) bool {
+	if account == nil {
+		return false
+	}
+	_, configured := account.Extra[AccountExtraChatGPTWebImageEnabled].(bool)
+	return configured
+}
+
+// UsesChatGPTWebImagePolicy selects the web image provider policy only when
+// explicitly configured; unsupported opt-ins are rejected by account validation.
+func UsesChatGPTWebImagePolicy(account *Account) bool {
+	return (isFreeChatGPTWebImageAccount(account) && chatGPTWebImageConfigured(account)) || chatGPTWebImageEnabled(account)
+}
+
 func chatGPTWebDefaultImageModel(account *Account) string {
 	if account != nil {
 		if model, _ := account.Extra[AccountExtraChatGPTWebImageDefaultModel].(string); strings.TrimSpace(model) != "" {
