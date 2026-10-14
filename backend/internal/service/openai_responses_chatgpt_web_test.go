@@ -27,10 +27,10 @@ func TestWebImageResponsesPreservesClientToolsAndStorage(t *testing.T) {
 	require.NoError(t, json.Unmarshal(prepared, &got))
 	require.Equal(t, "gpt-6-luna", got["model"])
 	require.Equal(t, false, got["store"])
-	tools := got["tools"].([]any)
+	tools := requireWebImageTestValue[[]any](t, got["tools"])
 	require.Len(t, tools, 2)
-	require.Equal(t, "exec_command", tools[0].(map[string]any)["name"])
-	require.Equal(t, webImageFunctionName, tools[1].(map[string]any)["name"])
+	require.Equal(t, "exec_command", requireWebImageTestValue[map[string]any](t, tools[0])["name"])
+	require.Equal(t, webImageFunctionName, requireWebImageTestValue[map[string]any](t, tools[1])["name"])
 	require.Equal(t, map[string]any{"type": "function", "name": webImageFunctionName}, got["tool_choice"])
 }
 
@@ -55,9 +55,9 @@ func TestWebImagePreviewBoundedAndRemovedOnlyFromAssistantHistory(t *testing.T) 
 	require.NoError(t, err)
 	var got map[string]any
 	require.NoError(t, json.Unmarshal(prepared, &got))
-	input := got["input"].([]any)
-	assistant := input[0].(map[string]any)["content"].([]any)[0].(map[string]any)["text"]
-	user := input[1].(map[string]any)["content"].([]any)[0].(map[string]any)["text"]
+	input := requireWebImageTestValue[[]any](t, got["input"])
+	assistant := requireWebImageTestValue[map[string]any](t, requireWebImageTestValue[[]any](t, requireWebImageTestValue[map[string]any](t, input[0])["content"])[0])["text"]
+	user := requireWebImageTestValue[map[string]any](t, requireWebImageTestValue[[]any](t, requireWebImageTestValue[map[string]any](t, input[1])["content"])[0])["text"]
 	require.NotContains(t, assistant, "base64")
 	require.Equal(t, preview, user)
 }
@@ -68,11 +68,11 @@ func TestWebImageResponsesReplaysOnlyBridgeOwnedHistory(t *testing.T) {
 	require.NoError(t, err)
 	var got map[string]any
 	require.NoError(t, json.Unmarshal(prepared, &got))
-	input := got["input"].([]any)
-	require.Equal(t, "message", input[0].(map[string]any)["type"])
-	require.NotContains(t, input[0].(map[string]any), "result")
-	require.Equal(t, "image_generation_call", input[1].(map[string]any)["type"])
-	require.Equal(t, "BBBB", input[1].(map[string]any)["result"])
+	input := requireWebImageTestValue[[]any](t, got["input"])
+	require.Equal(t, "message", requireWebImageTestValue[map[string]any](t, input[0])["type"])
+	require.NotContains(t, requireWebImageTestValue[map[string]any](t, input[0]), "result")
+	require.Equal(t, "image_generation_call", requireWebImageTestValue[map[string]any](t, input[1])["type"])
+	require.Equal(t, "BBBB", requireWebImageTestValue[map[string]any](t, input[1])["result"])
 }
 
 func TestWebImageResponsesRejectsUnimplementedContinuationBeforeGeneration(t *testing.T) {
@@ -102,14 +102,14 @@ func TestWebImageResponseSSEHasConsistentResultAndLifecycle(t *testing.T) {
 		require.Equal(t, float64(i), e["sequence_number"])
 	}
 	require.Equal(t, "response.output_item.added", events[2]["type"])
-	require.Equal(t, "", events[2]["item"].(map[string]any)["result"])
+	require.Equal(t, "", requireWebImageTestValue[map[string]any](t, events[2]["item"])["result"])
 	for _, e := range events[3:6] {
 		require.Equal(t, "ig_web_test", e["item_id"])
 	}
-	require.Equal(t, encoded, events[6]["item"].(map[string]any)["result"])
+	require.Equal(t, encoded, requireWebImageTestValue[map[string]any](t, events[6]["item"])["result"])
 	parsed, err := webImageCompletedResponse(recorder.Body.Bytes())
 	require.NoError(t, err)
-	require.Equal(t, encoded, parsed["output"].([]any)[0].(map[string]any)["result"])
+	require.Equal(t, encoded, requireWebImageTestValue[map[string]any](t, requireWebImageTestValue[[]any](t, parsed["output"])[0])["result"])
 }
 
 func webImageTestEvent(t *testing.T, event map[string]any) []byte {
@@ -194,20 +194,20 @@ func TestWebImageResponseSuppressesPrivateCallAndFinishesSameStream(t *testing.T
 	imageAdded, completed := 0, 0
 	for index, event := range events {
 		require.Equal(t, float64(index), event["sequence_number"])
-		if event["type"] == "response.output_item.added" && event["item"].(map[string]any)["type"] == "image_generation_call" {
+		if event["type"] == "response.output_item.added" && requireWebImageTestValue[map[string]any](t, event["item"])["type"] == "image_generation_call" {
 			imageAdded++
-			require.Equal(t, "", event["item"].(map[string]any)["result"])
+			require.Equal(t, "", requireWebImageTestValue[map[string]any](t, event["item"])["result"])
 		}
 		if event["type"] == "response.completed" {
 			completed++
-			require.Equal(t, "resp_image", event["response"].(map[string]any)["id"])
+			require.Equal(t, "resp_image", requireWebImageTestValue[map[string]any](t, event["response"])["id"])
 		}
 	}
 	require.Equal(t, 1, imageAdded)
 	require.Equal(t, 1, completed)
 	parsed, err := webImageCompletedResponse(recorder.Body.Bytes())
 	require.NoError(t, err)
-	require.Equal(t, "cG5n", parsed["output"].([]any)[0].(map[string]any)["result"])
+	require.Equal(t, "cG5n", requireWebImageTestValue[map[string]any](t, requireWebImageTestValue[[]any](t, parsed["output"])[0])["result"])
 }
 
 type webImageHeartbeatRecorder struct {
@@ -257,7 +257,7 @@ func TestWebImageResponseHeartbeatStopsAndFailureIsSSE(t *testing.T) {
 	events := webImageTestEvents(t, body)
 	last := events[len(events)-1]
 	require.Equal(t, "response.failed", last["type"])
-	require.Equal(t, "image_generation_outcome_unknown", last["response"].(map[string]any)["error"].(map[string]any)["code"])
+	require.Equal(t, "image_generation_outcome_unknown", requireWebImageTestValue[map[string]any](t, requireWebImageTestValue[map[string]any](t, last["response"])["error"])["code"])
 	before := recorder.Body.Len()
 	stream.Complete(map[string]any{"output": []any{}})
 	require.Equal(t, before, recorder.Body.Len())
@@ -273,4 +273,12 @@ func TestWebImageCapturePropagatesClientCancellation(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("capture did not propagate the request cancellation")
 	}
+}
+
+// requireWebImageTestValue validates decoded fixtures before inspecting fields.
+func requireWebImageTestValue[T any](t *testing.T, value any) T {
+	t.Helper()
+	result, ok := value.(T)
+	require.True(t, ok, "unexpected fixture type: %T", value)
+	return result
 }

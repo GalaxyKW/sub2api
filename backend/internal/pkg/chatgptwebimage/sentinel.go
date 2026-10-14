@@ -30,11 +30,11 @@ func (s *session) authenticate(ctx context.Context) error {
 		return s.failure("bootstrap", "transport", 0, err)
 	}
 	if r.StatusCode != http.StatusOK {
-		r.Body.Close()
+		_ = r.Body.Close()
 		return s.status("bootstrap", r)
 	}
 	root, err := readLimited(r.Body, maxJSONBytes)
-	r.Body.Close()
+	_ = r.Body.Close()
 	if err != nil {
 		return s.failure("bootstrap", "invalid_response", 200, err)
 	}

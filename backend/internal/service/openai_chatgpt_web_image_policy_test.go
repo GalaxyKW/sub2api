@@ -94,10 +94,10 @@ func TestWebImageResponsesModelPolicyAndOrdinaryChat(t *testing.T) {
 			require.Equal(t, tc.wantImage, model != nil)
 			var got map[string]any
 			require.NoError(t, json.Unmarshal(prepared, &got))
-			tools := got["tools"].([]any)
+			tools := requireWebImageTestValue[[]any](t, got["tools"])
 			if tc.wantImage {
 				require.Len(t, tools, 1)
-				require.Equal(t, webImageFunctionName, tools[0].(map[string]any)["name"])
+				require.Equal(t, webImageFunctionName, requireWebImageTestValue[map[string]any](t, tools[0])["name"])
 			} else {
 				require.Empty(t, tools)
 				require.NotContains(t, got["instructions"], "supplies the server-side")

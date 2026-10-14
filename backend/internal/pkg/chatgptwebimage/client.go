@@ -580,7 +580,7 @@ func (s *session) download(ctx context.Context, location string) ([]byte, error)
 		}
 		if response.StatusCode >= 300 && response.StatusCode < 400 {
 			next, locationErr := response.Location()
-			response.Body.Close()
+			_ = response.Body.Close()
 			if locationErr != nil || !s.allowedAssetURL(next) {
 				return nil, s.failure("download", "untrusted_download_origin", response.StatusCode, nil)
 			}
@@ -588,11 +588,11 @@ func (s *session) download(ctx context.Context, location string) ([]byte, error)
 			continue
 		}
 		if response.StatusCode != http.StatusOK {
-			response.Body.Close()
+			_ = response.Body.Close()
 			return nil, s.status("download", response)
 		}
 		binary, err := readLimited(response.Body, s.client.opts.MaxImageBytes)
-		response.Body.Close()
+		_ = response.Body.Close()
 		if err != nil {
 			return nil, s.failure("download", "invalid_image", response.StatusCode, err)
 		}

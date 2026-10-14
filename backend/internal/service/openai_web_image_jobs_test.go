@@ -40,7 +40,7 @@ func TestWebImageJobSurvivesClientDisconnectAndReplaysAfterRestart(t *testing.T)
 	go func() { _, err := store.run(ctx, key, fn); done <- err }()
 	<-started
 	cancel()
-	require.Equal(t, "image_generation_outcome_unknown", (<-done).(*OpenAIImagesUpstreamError).Code)
+	require.Equal(t, "image_generation_outcome_unknown", requireWebImageTestValue[*OpenAIImagesUpstreamError](t, (<-done)).Code)
 	close(release)
 	result, err := store.run(context.Background(), key, fn)
 	require.NoError(t, err)
@@ -65,7 +65,7 @@ func TestWebImageJobCrashClaimAndBrokenRecordNeverRegenerate(t *testing.T) {
 				t.Fatal("must not regenerate claimed image")
 				return chatgptwebimage.Result{}, nil
 			})
-			require.Equal(t, "image_generation_outcome_unknown", err.(*OpenAIImagesUpstreamError).Code)
+			require.Equal(t, "image_generation_outcome_unknown", requireWebImageTestValue[*OpenAIImagesUpstreamError](t, err).Code)
 		})
 	}
 }
@@ -135,7 +135,7 @@ func TestWebImageJobRetainsPublicFailureWithoutRetry(t *testing.T) {
 	}
 	for i := 0; i < 2; i++ {
 		_, err := store.run(context.Background(), key, fn)
-		require.Equal(t, "image_generation_outcome_unknown", err.(*OpenAIImagesUpstreamError).Code)
+		require.Equal(t, "image_generation_outcome_unknown", requireWebImageTestValue[*OpenAIImagesUpstreamError](t, err).Code)
 	}
 	require.Equal(t, 1, calls)
 }
