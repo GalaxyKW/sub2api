@@ -1815,6 +1815,11 @@ func (s *defaultOpenAIAccountScheduler) isAccountRequestCompatibleReason(ctx con
 	if req.RequestedModel != "" && !account.IsModelSupported(req.RequestedModel) {
 		return false, "model_not_supported"
 	}
+	if req.RequiredImageCapability != "" || OpenAIImagesEndpointFromContext(ctx) {
+		if reason := chatGPTWebImageSchedulingFailureReason(ctx, account, req.RequestedModel); reason != "" {
+			return false, reason
+		}
+	}
 	if req.GroupID != nil && s != nil && s.service != nil &&
 		s.service.needsUpstreamChannelRestrictionCheck(ctx, req.GroupID) &&
 		s.service.isUpstreamModelRestrictedByChannel(ctx, *req.GroupID, account, req.RequestedModel, req.RequireCompact) {
@@ -2142,6 +2147,13 @@ func (s *OpenAIGatewayService) SelectAccountWithSchedulerForImages(
 	excludedIDs map[int64]struct{},
 	requiredCapability OpenAIImagesCapability,
 ) (*AccountSelectionResult, OpenAIAccountScheduleDecision, error) {
+	// Carry image authorization through legacy selection, sticky bindings,
+	// snapshot refreshes and DB rechecks as well as the advanced scheduler.
+	ctx = WithOpenAIImagesEndpoint(ctx)
+	// Forwarding authorizes the channel-mapped compatibility model. Keep that
+	// authorization separate from the public model used by ordinary routing.
+	channelMapping, _ := s.ResolveChannelMappingAndRestrict(ctx, groupID, requestedModel)
+	ctx = context.WithValue(ctx, chatGPTWebImageSchedulingModelContextKey{}, strings.TrimSpace(channelMapping.MappedModel))
 	selection, decision, err := s.selectAccountWithScheduler(ctx, groupID, "", sessionHash, requestedModel, excludedIDs, OpenAIUpstreamTransportHTTPSSE, "", requiredCapability, false, PlatformOpenAI, false, false)
 	if err == nil && selection != nil && selection.Account != nil {
 		return selection, decision, nil

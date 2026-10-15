@@ -85,7 +85,7 @@ func TestChatGPTWebImagesRejectUnsupportedOptionsAndPrivacyFields(t *testing.T) 
 		{"mask", "image", func(r *OpenAIImagesRequest) { r.HasMask = true }},
 		{"multiple", "n", func(r *OpenAIImagesRequest) { r.N = 2 }},
 		{"stream", "stream", func(r *OpenAIImagesRequest) { r.Stream = true }},
-		{"size", "size", func(r *OpenAIImagesRequest) { r.Size = "1024x1024" }},
+		{"size", "size", func(r *OpenAIImagesRequest) { r.Size = "1024xinvalid" }},
 		{"quality", "quality", func(r *OpenAIImagesRequest) { r.Quality = "high" }},
 		{"transparent", "background", func(r *OpenAIImagesRequest) { r.Background = "transparent" }},
 		{"url_response", "response_format", func(r *OpenAIImagesRequest) { r.ResponseFormat = "url" }},

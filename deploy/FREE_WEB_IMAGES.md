@@ -53,6 +53,18 @@ distributed execution and billing guarantees.
 
 ## Limits and retry behavior
 
+- The Images API accepts an omitted `size`, `auto`, or `WIDTHxHEIGHT` (for
+  example, `1024x1024`, `1536x1024`, or `1024x1536`). Each dimension must be
+  between 64 and 4096 pixels, with at most 16,777,216 pixels in total. `auto`
+  preserves the generated PNG at its original resolution. An explicit size
+  adds an aspect-ratio and subject-safe-area instruction to the web prompt;
+  after generation, the server scales proportionally and center-crops if
+  necessary to return those exact pixel dimensions. This can crop edges or
+  upscale the image; it does not promise native generation at that resolution.
+  The response's `size` and usage dimensions describe the returned PNG. When
+  adaptation occurs, `X-Sub2API-Image-Size-Adaptation: resize-center-crop` and
+  `X-Sub2API-Image-Original-Size` identify it. This applies to Images API calls
+  such as Cherry Studio's image panel; ordinary chat previews are unchanged.
 - One text-to-image PNG per request. No image editing, reference-image
   continuation, batches, transparent output, WebSocket Responses, or
   `previous_response_id` continuation. Unsupported controls are rejected.
@@ -65,6 +77,13 @@ distributed execution and billing guarantees.
 - Retrying the same request can retrieve its stored result. If a job might have
   been accepted but its outcome is unknown, the bridge returns an error rather
   than silently submitting it again.
+- A provider failure that explicitly confirms generation never started releases
+  the job claim, allowing a later retry of the same request. Failures after a
+  possible submission, unknown errors, and interrupted pending claims remain
+  protected from duplicate generation. The bridge does not automatically submit
+  a second generation. Safe diagnostic logs record the stage, error category,
+  upstream status, and whether generation may have started, without credentials,
+  prompts, or upstream response bodies.
 
 The image concurrency limit also applies when a normal chat request selects the
 bridge tool. A newly started background job holds its slot until generation ends,

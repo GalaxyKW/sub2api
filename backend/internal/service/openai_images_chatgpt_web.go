@@ -13,7 +13,9 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/chatgptwebimage"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
 )
 
 const (
@@ -94,10 +96,12 @@ func validateChatGPTWebImagesRequest(parsed *OpenAIImagesRequest) *OpenAIImagesU
 	if parsed.Stream {
 		return unsupported("stream")
 	}
+	if _, err := chatGPTWebImagePromptForSize(parsed.Prompt, parsed.Size); err != nil {
+		return err
+	}
 	for _, field := range []struct{ key, value, allowed string }{
 		{"response_format", parsed.ResponseFormat, "b64_json"},
 		{"output_format", parsed.OutputFormat, "png"},
-		{"size", parsed.Size, "auto"},
 		{"quality", parsed.Quality, "auto"},
 		{"background", parsed.Background, "auto"},
 		{"moderation", parsed.Moderation, "auto"},
@@ -129,9 +133,26 @@ func (s *OpenAIGatewayService) generateWebImage(ctx context.Context, account *Ac
 	if len(prompt) > 64<<10 {
 		return chatgptwebimage.Result{}, chatGPTWebImageRequestError("invalid_request", "prompt exceeds the ChatGPT web image size limit", "prompt")
 	}
+	logFailure := func(err error) {
+		var providerErr *chatgptwebimage.Error
+		if !errors.As(err, &providerErr) {
+			return
+		}
+		diagnostic := providerErr.Diagnostic()
+		// The request-scoped logger carries the request ID into detached jobs.
+		// Never attach err/cause, the request body, headers, or credentials.
+		logger.FromContext(ctx).Error("chatgpt_web_image_failed",
+			zap.Int64("account_id", account.ID),
+			zap.String("provider_stage", diagnostic.Stage),
+			zap.String("provider_error_kind", diagnostic.Kind),
+			zap.Int("upstream_status_code", diagnostic.StatusCode),
+			zap.Bool("generation_may_have_started", diagnostic.Accepted))
+	}
 	token, _, err := s.GetAccessToken(ctx, account)
 	if err != nil {
-		return chatgptwebimage.Result{}, &OpenAIImagesUpstreamError{StatusCode: http.StatusBadGateway, ErrorType: "upstream_error", Code: "chatgpt_web_image_credentials_unavailable", Message: "Could not obtain account credentials for ChatGPT web image generation"}
+		providerErr := &chatgptwebimage.Error{Stage: "credentials", Kind: "credentials_unavailable"}
+		logFailure(providerErr)
+		return chatgptwebimage.Result{}, providerErr
 	}
 	proxyURL := ""
 	if account.ProxyID != nil && account.Proxy != nil {
@@ -142,12 +163,18 @@ func (s *OpenAIGatewayService) generateWebImage(ctx context.Context, account *Ac
 		MaxPolls: 60, MaxImageBytes: openAIImageMaxDownloadBytes,
 	})
 	if err != nil {
-		return chatgptwebimage.Result{}, chatGPTWebImagePublicError(err)
+		providerErr := &chatgptwebimage.Error{Stage: "initialize", Kind: "invalid_configuration"}
+		logFailure(providerErr)
+		return chatgptwebimage.Result{}, providerErr
 	}
 	defer client.CloseIdleConnections()
 	result, err := client.Generate(ctx, chatgptwebimage.GenerateRequest{AccessToken: token, Prompt: prompt, AllowRegularChat: true})
 	if err != nil {
-		return result, chatGPTWebImagePublicError(err)
+		logFailure(err)
+		// The job store needs the original acceptance state to distinguish a
+		// safe later retry from an unknown generation outcome. Convert only at
+		// the HTTP/persistence boundary.
+		return result, err
 	}
 	return result, nil
 }
@@ -160,6 +187,11 @@ func chatGPTWebImagePublicError(err error) *OpenAIImagesUpstreamError {
 	result := &OpenAIImagesUpstreamError{StatusCode: http.StatusBadGateway, ErrorType: "upstream_error", Code: "chatgpt_web_image_failed", Message: "ChatGPT web image generation failed"}
 	var providerErr *chatgptwebimage.Error
 	if errors.As(err, &providerErr) {
+		diagnostic := providerErr.Diagnostic()
+		if diagnostic.Kind == "credentials_unavailable" {
+			result.Code = "chatgpt_web_image_credentials_unavailable"
+			result.Message = "Could not obtain account credentials for ChatGPT web image generation"
+		}
 		if providerErr.StatusCode == http.StatusTooManyRequests {
 			result.StatusCode = http.StatusTooManyRequests
 			result.ErrorType = "rate_limit_error"
@@ -173,6 +205,15 @@ func chatGPTWebImagePublicError(err error) *OpenAIImagesUpstreamError {
 			result.ErrorType = "image_generation_error"
 			result.Code = "image_generation_outcome_unknown"
 			result.Message = "The image request may have started but its result is unavailable; a new generation was not submitted"
+		}
+		result.Message += fmt.Sprintf(" (stage=%s, reason=%s, upstream_status=%d)", diagnostic.Stage, diagnostic.Kind, diagnostic.StatusCode)
+		if !diagnostic.Accepted {
+			switch diagnostic.Kind {
+			case "authentication_or_challenge", "interactive_challenge":
+				result.Message += "; check the account's ChatGPT web session and outbound proxy; no image generation started"
+			case "transport", "timeout_or_canceled":
+				result.Message += "; check outbound connectivity and retry; no image generation started"
+			}
 		}
 	}
 	// Not UpstreamFailoverError: the Images handler must not submit another job.
@@ -195,7 +236,12 @@ func (s *OpenAIGatewayService) forwardChatGPTWebImages(ctx context.Context, c *g
 		writeOpenAIImagesUpstreamErrorResponse(c, err)
 		return nil, err
 	}
-	result, err := s.generateWebImageOnce(ctx, c, account, parsed.Body, parsed.Prompt, imageModel.RequestedModel)
+	prompt, sizeErr := chatGPTWebImagePromptForSize(parsed.Prompt, parsed.Size)
+	if sizeErr != nil {
+		writeOpenAIImagesUpstreamErrorResponse(c, sizeErr)
+		return nil, sizeErr
+	}
+	result, err := s.generateWebImageOnce(ctx, c, account, parsed.Body, prompt, imageModel.RequestedModel)
 	if err != nil {
 		publicErr := chatGPTWebImagePublicError(err)
 		writeOpenAIImagesUpstreamErrorResponse(c, publicErr)
@@ -225,8 +271,23 @@ func writeChatGPTWebImagesResult(c *gin.Context, parsed *OpenAIImagesRequest, re
 	if err != nil || config.Width <= 0 || config.Height <= 0 || int64(config.Width)*int64(config.Height) > 32*1024*1024 {
 		return fail("ChatGPT web image generation returned invalid PNG dimensions")
 	}
-	if _, err := png.Decode(bytes.NewReader(img.Bytes)); err != nil {
+	decoded, err := png.Decode(bytes.NewReader(img.Bytes))
+	if err != nil {
 		return fail("ChatGPT web image generation did not return a valid PNG")
+	}
+	width, height, sizeErr := parseChatGPTWebImageSize(parsed.Size)
+	if sizeErr != nil {
+		writeOpenAIImagesUpstreamErrorResponse(c, sizeErr)
+		return nil, sizeErr
+	}
+	if width > 0 && (config.Width != width || config.Height != height) {
+		img.Bytes, err = resizeChatGPTWebImage(decoded, width, height)
+		if err != nil {
+			return fail("Could not resize the generated PNG to the requested dimensions; the image was generated and a new generation was not submitted")
+		}
+		c.Header("X-Sub2API-Image-Original-Size", fmt.Sprintf("%dx%d", config.Width, config.Height))
+		c.Header("X-Sub2API-Image-Size-Adaptation", "resize-center-crop")
+		config.Width, config.Height = width, height
 	}
 	size := fmt.Sprintf("%dx%d", config.Width, config.Height)
 	meta := openAIResponsesImageResult{OutputFormat: "png", Size: size, Model: strings.TrimSpace(result.ObservedImageModel)}

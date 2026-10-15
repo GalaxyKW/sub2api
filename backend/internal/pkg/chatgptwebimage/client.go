@@ -88,7 +88,8 @@ type Error struct {
 }
 
 func (e *Error) Error() string {
-	return fmt.Sprintf("chatgpt web image %s: %s (HTTP %d, accepted=%t)", e.Stage, e.Kind, e.StatusCode, e.Accepted)
+	d := e.Diagnostic()
+	return fmt.Sprintf("chatgpt web image %s: %s (HTTP %d, accepted=%t)", d.Stage, d.Kind, d.StatusCode, d.Accepted)
 }
 
 func (e *Error) Unwrap() error { return e.cause }

@@ -443,6 +443,11 @@ func openAICompatibleAccountEligibilityFailureReasonBeforeProfit(ctx context.Con
 	if requestedModel != "" && !account.IsModelSupported(requestedModel) {
 		return "model_not_supported"
 	}
+	if OpenAIImagesEndpointFromContext(ctx) {
+		if reason := chatGPTWebImageSchedulingFailureReason(ctx, account, requestedModel); reason != "" {
+			return reason
+		}
+	}
 	if !account.SupportsOpenAIEndpointCapability(requiredCapability) {
 		if account.IsGrok() && requiredCapability == OpenAIEndpointCapabilityGrokMediaGeneration {
 			_, reason := account.GrokMediaGenerationEligibility()

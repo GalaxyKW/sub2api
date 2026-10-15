@@ -205,13 +205,34 @@ func (s *webImageJobStore) run(ctx context.Context, key string, generate func(co
 			if recover() != nil {
 				record = webImageJobRecord{State: "complete", BillingID: billingID, Error: webImageJobUnknown()}
 			}
-			if err := writeWebImageJob(path, record); err != nil {
+			var persistErr error
+			if record.State == "retryable" {
+				// Remove only our own claim, before publishing the result to
+				// waiters. A second process can safely claim the request after
+				// removal because this attempt provably did not generate.
+				persistErr = os.Remove(path)
+				if persistErr == nil {
+					persistErr = syncWebImageJobDir(s.dir)
+				}
+			} else {
+				persistErr = writeWebImageJob(path, record)
+			}
+			if persistErr != nil {
 				record = webImageJobRecord{State: "complete", BillingID: billingID, Error: webImageJobUnknown()}
 			}
 			s.finish(key, job, record)
 		}()
 		result, err := generate(jobCtx)
 		if err != nil {
+			// Only a typed provider error can prove that generation never
+			// started. Release this claim while this job still owns it so the
+			// next request can retry a failed bootstrap/prepare or definitive
+			// rejection. Never infer this from a generic HTTP 502: a timeout
+			// after sending generation may already have consumed image quota.
+			var providerErr *chatgptwebimage.Error
+			if errors.As(err, &providerErr) && !providerErr.Accepted {
+				record.State = "retryable"
+			}
 			public := chatGPTWebImagePublicError(err)
 			// Persist only the public fields, never an upstream response body.
 			record.Error = &OpenAIImagesUpstreamError{StatusCode: public.StatusCode, ErrorType: public.ErrorType, Code: public.Code, Message: public.Message, Param: public.Param}
@@ -342,10 +363,13 @@ func (s *webImageJobStore) makeRoom() error {
 		}
 		info, err := entry.Info()
 		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue // A known-not-started job released its claim during the scan.
+			}
 			return err
 		}
 		if time.Since(info.ModTime()) > webImageJobRetention {
-			if err := os.Remove(filepath.Join(s.dir, entry.Name())); err != nil {
+			if err := os.Remove(filepath.Join(s.dir, entry.Name())); err != nil && !errors.Is(err, os.ErrNotExist) {
 				return err
 			}
 			continue
@@ -354,6 +378,9 @@ func (s *webImageJobStore) makeRoom() error {
 			// Claims now include the durable billing identity. Inspect their
 			// state instead of assuming a short fixed-size pending document.
 			record, readErr := readWebImageJob(filepath.Join(s.dir, entry.Name()))
+			if errors.Is(readErr, os.ErrNotExist) {
+				continue
+			}
 			if readErr != nil || record.State != "complete" {
 				used += webImageJobMaxFileBytes
 				continue

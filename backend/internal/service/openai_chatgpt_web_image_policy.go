@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 
@@ -61,6 +62,29 @@ func resolveChatGPTWebImageModel(account *Account, requested string) (chatGPTWeb
 		return chatGPTWebImageModel{}, chatGPTWebImageRequestError("chatgpt_web_image_model_not_allowed", "The requested image compatibility model is not explicitly enabled for this account", "model")
 	}
 	return chatGPTWebImageModel{RequestedModel: requested, MappedModel: strings.TrimSpace(mapped)}, nil
+}
+
+type chatGPTWebImageSchedulingModelContextKey struct{}
+
+// Scheduling must apply the same opt-in and model authorization as forwarding.
+// An empty ordinary model mapping allows chat, but does not grant web images.
+// Accounts without an explicit web image policy retain their upstream route.
+func chatGPTWebImageSchedulingFailureReason(ctx context.Context, account *Account, requested string) string {
+	if !UsesChatGPTWebImagePolicy(account) {
+		return ""
+	}
+	if ctx != nil {
+		if mapped, ok := ctx.Value(chatGPTWebImageSchedulingModelContextKey{}).(string); ok && mapped != "" {
+			requested = mapped
+		}
+	}
+	if _, err := resolveChatGPTWebImageModel(account, requested); err != nil {
+		if publicErr, ok := err.(*OpenAIImagesUpstreamError); ok {
+			return publicErr.Code
+		}
+		return "chatgpt_web_image_unavailable"
+	}
+	return ""
 }
 
 func isOpenAIImageToolDeclaration(raw any) bool {
