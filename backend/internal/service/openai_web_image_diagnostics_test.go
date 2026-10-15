@@ -27,6 +27,8 @@ func TestChatGPTWebImagePublicErrorPreservesSafeFailureStage(t *testing.T) {
 		{"bootstrap rejected", "bootstrap", "authentication_or_challenge", 403, false, 502, "chatgpt_web_image_failed", "check the account's ChatGPT web session"},
 		{"prepare network", "prepare", "transport", 0, false, 502, "chatgpt_web_image_failed", "check outbound connectivity and retry"},
 		{"web quota", "prepare", "rate_limited", 429, false, 429, "chatgpt_web_image_rate_limited", "rate limited"},
+		{"web model unavailable", "conversation", "model_not_found", 404, false, 502, "chatgpt_web_image_model_unavailable", "no image generation started and no alternate model was submitted"},
+		{"uncertain model failure", "conversation", "model_not_found", 404, true, 400, "image_generation_outcome_unknown", "a new generation was not submitted"},
 		{"conversation interrupted", "conversation", "transport", 0, true, 400, "image_generation_outcome_unknown", "a new generation was not submitted"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

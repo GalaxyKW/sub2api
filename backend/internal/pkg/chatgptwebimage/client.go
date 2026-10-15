@@ -226,6 +226,9 @@ func (s *session) request(ctx context.Context, method, path string, payload any,
 
 func (s *session) status(stage string, r *http.Response) *Error {
 	kind := "upstream_http"
+	if stage == "conversation" && r.StatusCode == http.StatusNotFound && isWebImageModelNotFound(r.Body) {
+		kind = "model_not_found"
+	}
 	if r.StatusCode == 401 || r.StatusCode == 403 {
 		kind = "authentication_or_challenge"
 	}
@@ -240,6 +243,44 @@ func (s *session) status(stage string, r *http.Response) *Error {
 		e.RetryAfter = max(0, time.Until(at))
 	}
 	return e
+}
+
+// Recognize only the fixed model error in known JSON error fields. Reading a
+// bounded body here must never retain or expose arbitrary upstream messages.
+func isWebImageModelNotFound(body io.Reader) bool {
+	if body == nil {
+		return false
+	}
+	data, err := readLimited(body, 64<<10)
+	if err != nil {
+		return false
+	}
+	var payload struct {
+		Detail  json.RawMessage `json:"detail"`
+		Message string          `json:"message"`
+		Code    string          `json:"code"`
+		Error   json.RawMessage `json:"error"`
+	}
+	if json.Unmarshal(data, &payload) != nil {
+		return false
+	}
+	if payload.Message == "Model not found" || payload.Code == "model_not_found" {
+		return true
+	}
+	var detail string
+	if json.Unmarshal(payload.Detail, &detail) == nil && detail == "Model not found" {
+		return true
+	}
+	for _, raw := range []json.RawMessage{payload.Detail, payload.Error} {
+		var fields struct {
+			Message string `json:"message"`
+			Code    string `json:"code"`
+		}
+		if json.Unmarshal(raw, &fields) == nil && (fields.Message == "Model not found" || fields.Code == "model_not_found") {
+			return true
+		}
+	}
+	return false
 }
 
 func readLimited(r io.Reader, limit int64) ([]byte, error) {

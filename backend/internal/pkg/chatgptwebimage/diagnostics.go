@@ -22,7 +22,7 @@ func (e *Error) Diagnostic() Diagnostic {
 		d.Stage = e.Stage
 	}
 	switch e.Kind {
-	case "credentials_unavailable", "invalid_configuration", "invalid_request", "transport", "timeout_or_canceled", "upstream_http", "authentication_or_challenge", "rate_limited", "invalid_response", "entropy", "proof_failed", "interactive_challenge", "missing_requirements_token", "missing_conduit", "invalid_stream", "no_image", "invalid_image", "unsupported_image", "untrusted_download_origin", "invalid_download_url", "too_many_redirects":
+	case "credentials_unavailable", "invalid_configuration", "invalid_request", "transport", "timeout_or_canceled", "upstream_http", "model_not_found", "authentication_or_challenge", "rate_limited", "invalid_response", "entropy", "proof_failed", "interactive_challenge", "missing_requirements_token", "missing_conduit", "invalid_stream", "no_image", "invalid_image", "unsupported_image", "untrusted_download_origin", "invalid_download_url", "too_many_redirects":
 		d.Kind = e.Kind
 	}
 	if e.StatusCode >= 100 && e.StatusCode <= 599 {

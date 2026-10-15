@@ -192,6 +192,10 @@ func chatGPTWebImagePublicError(err error) *OpenAIImagesUpstreamError {
 			result.Code = "chatgpt_web_image_credentials_unavailable"
 			result.Message = "Could not obtain account credentials for ChatGPT web image generation"
 		}
+		if diagnostic.Kind == "model_not_found" && diagnostic.Stage == "conversation" && diagnostic.StatusCode == http.StatusNotFound && !diagnostic.Accepted {
+			result.Code = "chatgpt_web_image_model_unavailable"
+			result.Message = "ChatGPT web rejected the conversation model as unavailable; no image generation started and no alternate model was submitted"
+		}
 		if providerErr.StatusCode == http.StatusTooManyRequests {
 			result.StatusCode = http.StatusTooManyRequests
 			result.ErrorType = "rate_limit_error"
