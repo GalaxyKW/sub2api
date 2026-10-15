@@ -48,9 +48,10 @@ func webImageConcurrencyHandler(t *testing.T, web bool) (*OpenAIGatewayHandler, 
 	account := service.Account{
 		ID: 1, Name: "image-concurrency-test", Platform: service.PlatformOpenAI,
 		Type: service.AccountTypeOAuth, Status: service.StatusActive, Schedulable: true,
-		Credentials: map[string]any{"access_token": "test-token", "plan_type": "free"},
+		Credentials: map[string]any{"access_token": "test-token", "plan_type": "pro"},
 	}
 	if web {
+		account.Credentials["plan_type"] = "free"
 		account.Extra = map[string]any{service.AccountExtraChatGPTWebImageEnabled: true, service.AccountExtraChatGPTWebImageRegularChat: true}
 		account.Credentials["model_mapping"] = map[string]any{"gpt-5.4": "gpt-5.4", "gpt-image-2": "gpt-image-2"}
 	}

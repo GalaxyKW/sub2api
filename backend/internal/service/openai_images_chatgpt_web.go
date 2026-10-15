@@ -228,7 +228,7 @@ func (s *OpenAIGatewayService) forwardChatGPTWebImages(ctx context.Context, c *g
 	start := time.Now()
 	c.Header("X-Sub2API-Image-Provider", chatGPTWebImageProvider)
 	requestModel := strings.TrimSpace(parsed.Model)
-	if mapped := strings.TrimSpace(channelMappedModel); mapped != "" {
+	if mapped := strings.TrimSpace(channelMappedModel); mapped != "" && !IsGPTImageGenerationModel(requestModel) {
 		requestModel = mapped
 	}
 	imageModel, err := resolveChatGPTWebImageModel(account, requestModel)

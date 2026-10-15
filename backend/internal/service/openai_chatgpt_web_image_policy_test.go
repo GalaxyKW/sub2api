@@ -17,21 +17,21 @@ func webImagePolicyAccount(mapping map[string]any) *Account {
 		Extra:       map[string]any{AccountExtraChatGPTWebImageEnabled: true, AccountExtraChatGPTWebImageRegularChat: true}}
 }
 
-func TestChatGPTWebImageModelRequiresExplicitImageMapping(t *testing.T) {
+func TestChatGPTWebImageModelsIgnoreChatMapping(t *testing.T) {
 	cases := []struct {
 		name, requested, configured, want string
 		mapping                           map[string]any
 	}{
-		{"default", "", "", "gpt-image-2", map[string]any{"gpt-image-2": "gpt-image-2"}},
-		{"configured_alias", "", "poster", "gpt-image-1.5", map[string]any{"poster": "gpt-image-1.5"}},
-		{"explicit_beats_default", "gpt-image-1", "gpt-image-2", "gpt-image-1", map[string]any{"gpt-image-1": "gpt-image-1"}},
-		{"wildcard", "gpt-image-2.5-flare", "", "gpt-image-2", map[string]any{"gpt-image-*": "gpt-image-2"}},
-		{"alias_25_is_only_compatibility", "picture", "", "gpt-image-2.5-flare", map[string]any{"picture": "gpt-image-2.5-flare"}},
-		{"no_mapping", "", "", "", nil},
-		{"text_only", "", "", "", map[string]any{"gpt-6-luna": "gpt-6-luna"}},
-		{"explicit_does_not_use_default", "gpt-image-1", "", "", map[string]any{"gpt-image-2": "gpt-image-2"}},
-		{"image_name_mapped_to_text", "gpt-image-2", "", "", map[string]any{"gpt-image-2": "gpt-6-luna"}},
-		{"wildcard_target_is_literal", "gpt-image-2", "", "", map[string]any{"*": "*"}},
+		{"fixed_default", "", "poster", "gpt-image-2", map[string]any{"poster": "gpt-image-1.5"}},
+		{"no_mapping", "gpt-image-2.5-flare", "", "gpt-image-2.5-flare", nil},
+		{"chat_only_mapping", "gpt-image-2.5-sunburst", "", "gpt-image-2.5-sunburst", map[string]any{"gpt-6-luna": "gpt-6-luna"}},
+		{"native_ignores_image_remap", "gpt-image-2", "", "gpt-image-2", map[string]any{"gpt-image-2": "gpt-image-1"}},
+		{"native_ignores_text_remap", "gpt-image-2", "", "gpt-image-2", map[string]any{"gpt-image-2": "gpt-6-luna"}},
+		{"native_ignores_wildcard", "gpt-image-2.5-flare", "", "gpt-image-2.5-flare", map[string]any{"gpt-image-*": "gpt-image-2"}},
+		{"existing_alias", "picture", "", "gpt-image-2.5-flare", map[string]any{"picture": "gpt-image-2.5-flare"}},
+		{"text_is_not_image", "gpt-6-luna", "", "", map[string]any{"gpt-6-luna": "gpt-6-luna"}},
+		{"unknown_alias", "picture", "", "", nil},
+		{"literal_wildcard_target", "picture", "", "", map[string]any{"*": "*"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -49,14 +49,13 @@ func TestChatGPTWebImageModelRequiresExplicitImageMapping(t *testing.T) {
 			}
 		})
 	}
-	// Provider opt-in must not narrow existing unrestricted text semantics.
 	a := webImagePolicyAccount(nil)
 	require.True(t, a.IsModelSupported("gpt-6-luna"))
-	_, err := resolveChatGPTWebImageModel(a, "gpt-image-2")
-	require.Error(t, err)
-	a = webImagePolicyAccount(map[string]any{"gpt-image-2": "gpt-image-2"})
+	require.True(t, a.IsModelSupported("gpt-image-2.5-flare"))
 	a.Extra[AccountExtraChatGPTWebImageEnabled] = false
-	_, err = resolveChatGPTWebImageModel(a, "gpt-image-2")
+	require.False(t, a.IsModelSupported("gpt-image-2"))
+	require.True(t, a.IsModelSupported("gpt-6-luna"))
+	_, err := resolveChatGPTWebImageModel(a, "gpt-image-2")
 	require.Error(t, err)
 }
 
@@ -67,19 +66,19 @@ func TestWebImageResponsesModelPolicyAndOrdinaryChat(t *testing.T) {
 		group, wantImage, fail bool
 	}{
 		{"default_allowed", `{"model":"gpt-6-luna","input":"draw"}`, map[string]any{"gpt-image-2": "gpt-image-2"}, true, true, false},
-		{"default_denied_plain_chat", `{"model":"gpt-6-luna","previous_response_id":"resp_text","input":"hello"}`, map[string]any{"gpt-6-luna": "gpt-6-luna"}, true, false, false},
-		{"no_mapping_plain_chat", `{"model":"gpt-6-luna","input":"hello"}`, nil, true, false, false},
+		{"previous_response_text_chat", `{"model":"gpt-6-luna","previous_response_id":"resp_text","input":"hello"}`, map[string]any{"gpt-6-luna": "gpt-6-luna"}, true, false, false},
+		{"no_mapping_plain_chat", `{"model":"gpt-6-luna","input":"hello"}`, nil, true, true, false},
 		{"group_off_plain_chat", `{"model":"gpt-6-luna","input":"hello"}`, map[string]any{"gpt-image-2": "gpt-image-2"}, false, false, false},
 		{"explicit_allowed_default_denied", `{"model":"gpt-6-luna","tools":[{"type":"image_generation","model":"poster"}]}`, map[string]any{"poster": "gpt-image-1"}, true, true, false},
-		{"explicit_denied_default_allowed", `{"model":"gpt-6-luna","tools":[{"type":"image_generation","model":"gpt-image-1"}]}`, map[string]any{"gpt-image-2": "gpt-image-2"}, true, false, false},
+		{"unlisted_image_allowed", `{"model":"gpt-6-luna","tools":[{"type":"image_generation","model":"gpt-image-1"}]}`, map[string]any{"gpt-image-2": "gpt-image-2"}, true, true, false},
 		{"declared_group_off", `{"model":"gpt-6-luna","tools":[{"type":"image_generation","model":"gpt-image-2","action":"edit","quality":"high"}]}`, map[string]any{"gpt-image-2": "gpt-image-2"}, false, false, false},
 		{"forced_group_off", `{"model":"gpt-6-luna","tools":[{"type":"image_generation","model":"gpt-image-2"}],"tool_choice":{"type":"image_generation"}}`, map[string]any{"gpt-image-2": "gpt-image-2"}, false, false, true},
-		{"forced_model_denied", `{"model":"gpt-6-luna","tools":[{"type":"image_generation","model":"gpt-image-1"}],"tool_choice":{"type":"image_generation"}}`, map[string]any{"gpt-image-2": "gpt-image-2"}, true, false, true},
-		{"required_image_only_denied", `{"model":"gpt-6-luna","tools":[{"type":"namespace","name":"image_gen","tools":[]}],"tool_choice":"required"}`, nil, true, false, true},
-		{"required_additional_image_only_denied", `{"model":"gpt-6-luna","input":[{"type":"additional_tools","tools":[{"type":"image_generation","model":"gpt-image-1"}]}],"tool_choice":"required"}`, map[string]any{"gpt-image-2": "gpt-image-2"}, true, false, true},
+		{"forced_unlisted_image_allowed", `{"model":"gpt-6-luna","tools":[{"type":"image_generation","model":"gpt-image-1"}],"tool_choice":{"type":"image_generation"}}`, map[string]any{"gpt-image-2": "gpt-image-2"}, true, true, false},
+		{"required_image_only_allowed", `{"model":"gpt-6-luna","tools":[{"type":"namespace","name":"image_gen","tools":[]}],"tool_choice":"required"}`, nil, true, true, false},
+		{"required_additional_image_only_allowed", `{"model":"gpt-6-luna","input":[{"type":"additional_tools","tools":[{"type":"image_generation","model":"gpt-image-1"}]}],"tool_choice":"required"}`, map[string]any{"gpt-image-2": "gpt-image-2"}, true, true, false},
 		{"additional_edit_rejected", `{"model":"gpt-6-luna","input":[{"type":"additional_tools","tools":[{"type":"image_generation","model":"gpt-image-2","action":"edit"}]}]}`, map[string]any{"gpt-image-2": "gpt-image-2"}, true, false, true},
 		{"additional_quality_rejected", `{"model":"gpt-6-luna","input":[{"type":"additional_tools","tools":[{"type":"image_generation","model":"gpt-image-2","quality":"high"}]}]}`, map[string]any{"gpt-image-2": "gpt-image-2"}, true, false, true},
-		{"denied_additional_edit_keeps_chat", `{"model":"gpt-6-luna","input":[{"type":"additional_tools","tools":[{"type":"image_generation","model":"gpt-image-2","action":"edit","quality":"high"}]}]}`, nil, true, false, false},
+		{"unlisted_additional_edit_rejected", `{"model":"gpt-6-luna","input":[{"type":"additional_tools","tools":[{"type":"image_generation","model":"gpt-image-2","action":"edit","quality":"high"}]}]}`, nil, true, false, true},
 		{"explicit_wrong_type", `{"model":"gpt-6-luna","tools":[{"type":"image_generation","model":42}]}`, map[string]any{"gpt-image-2": "gpt-image-2"}, true, false, true},
 		{"ambiguous_models", `{"tools":[{"type":"image_generation","model":"gpt-image-1"},{"type":"image_generation","model":"gpt-image-2"}]}`, map[string]any{"gpt-image-*": "gpt-image-2"}, true, false, true},
 	}
@@ -108,7 +107,9 @@ func TestWebImageResponsesModelPolicyAndOrdinaryChat(t *testing.T) {
 
 func TestWebImageDisabledRequiredToolCanStillSelectTextTool(t *testing.T) {
 	body := []byte(`{"model":"gpt-6-luna","tool_choice":"required","tools":[{"type":"image_generation","model":"gpt-image-2"}],"input":[{"type":"additional_tools","tools":[{"type":"function","name":"clock"}]}]}`)
-	prepared, selected, err := prepareWebImageResponsesForAccount(body, webImagePolicyAccount(nil), true)
+	a := webImagePolicyAccount(nil)
+	a.Extra[AccountExtraChatGPTWebImageEnabled] = false
+	prepared, selected, err := prepareWebImageResponsesForAccount(body, a, true)
 	require.NoError(t, err)
 	require.Nil(t, selected)
 	require.NotContains(t, string(prepared), `"type":"image_generation"`)
@@ -134,16 +135,16 @@ func TestWebImageDisabledPreservesTextToolsAndCleansBridgeHistory(t *testing.T) 
 	require.True(t, ShouldBridgeChatGPTWebResponses(context.Background(), c, a))
 }
 
-func TestWebImageResponsesUnconfiguredAccountsPreserveUpstreamPath(t *testing.T) {
+func TestWebImageResponsesUnconfiguredFreeCannotUseNativeImages(t *testing.T) {
 	cases := []struct {
 		name  string
 		plan  string
 		extra map[string]any
 		want  bool
 	}{
-		{"absent_free", "free", nil, false},
-		{"empty_free", "free", map[string]any{}, false},
-		{"invalid_free", "free", map[string]any{AccountExtraChatGPTWebImageEnabled: "true"}, false},
+		{"absent_free", "free", nil, true},
+		{"empty_free", "free", map[string]any{}, true},
+		{"invalid_free", "free", map[string]any{AccountExtraChatGPTWebImageEnabled: "true"}, true},
 		{"enabled_free", "free", map[string]any{AccountExtraChatGPTWebImageEnabled: true}, true},
 		{"disabled_free", "free", map[string]any{AccountExtraChatGPTWebImageEnabled: false}, true},
 		{"absent_pro", "pro", nil, false},

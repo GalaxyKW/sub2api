@@ -10,7 +10,7 @@ import (
 
 const AccountExtraChatGPTWebImageDefaultModel = "chatgpt_web_image_default_model"
 
-// A model here is a locally authorized compatibility entry. The web provider
+// A model here is a compatibility entry. The web provider
 // selects its own image backend; this is never evidence of its actual model ID.
 type chatGPTWebImageModel struct {
 	RequestedModel string
@@ -21,34 +21,32 @@ func isFreeChatGPTWebImageAccount(account *Account) bool {
 	return account != nil && account.IsOpenAIOAuth() && strings.EqualFold(strings.TrimSpace(account.GetCredential("plan_type")), "free")
 }
 
-// A missing flag preserves the original upstream behavior. Explicit false is
-// different: it disables web images and removes stale image tools/history.
-func chatGPTWebImageConfigured(account *Account) bool {
-	if account == nil {
-		return false
-	}
-	_, configured := account.Extra[AccountExtraChatGPTWebImageEnabled].(bool)
-	return configured
-}
-
-// UsesChatGPTWebImagePolicy selects the web image provider policy only when
-// explicitly configured; unsupported opt-ins are rejected by account validation.
+// Every Free image request follows the web policy. Missing or disabled opt-in
+// is denied instead of falling back to the unsupported native Codex image path.
 func UsesChatGPTWebImagePolicy(account *Account) bool {
-	return (isFreeChatGPTWebImageAccount(account) && chatGPTWebImageConfigured(account)) || chatGPTWebImageEnabled(account)
+	return isFreeChatGPTWebImageAccount(account) || chatGPTWebImageEnabled(account)
 }
 
-func chatGPTWebDefaultImageModel(account *Account) string {
-	if account != nil {
-		if model, _ := account.Extra[AccountExtraChatGPTWebImageDefaultModel].(string); strings.TrimSpace(model) != "" {
-			return strings.TrimSpace(model)
-		}
-	}
+func chatGPTWebDefaultImageModel(_ *Account) string {
 	return "gpt-image-2"
 }
 
-// Unlike the ordinary account allowlist (where empty means unrestricted), web
-// images require an explicit image mapping. Keep that stronger opt-in local to
-// this provider instead of changing existing text/passthrough model semantics.
+// Native image names are web compatibility entries, independent of the chat
+// allowlist or legacy image remapping. Existing aliases remain usable only when
+// their explicit account mapping points at an image model.
+func chatGPTWebImageModelID(account *Account, requested string) (string, bool) {
+	requested = strings.TrimSpace(requested)
+	if IsGPTImageGenerationModel(requested) {
+		return requested, true
+	}
+	if account != nil {
+		if mapped, matched := account.ResolveMappedModel(requested); matched && IsGPTImageGenerationModel(mapped) {
+			return strings.TrimSpace(mapped), true
+		}
+	}
+	return "", false
+}
+
 func resolveChatGPTWebImageModel(account *Account, requested string) (chatGPTWebImageModel, error) {
 	if err := validateChatGPTWebImageAccount(account); err != nil {
 		return chatGPTWebImageModel{}, err
@@ -57,27 +55,33 @@ func resolveChatGPTWebImageModel(account *Account, requested string) (chatGPTWeb
 	if requested == "" {
 		requested = chatGPTWebDefaultImageModel(account)
 	}
-	mapped, matched := account.ResolveMappedModel(requested)
-	if !matched || !IsGPTImageGenerationModel(strings.TrimSpace(mapped)) {
-		return chatGPTWebImageModel{}, chatGPTWebImageRequestError("chatgpt_web_image_model_not_allowed", "The requested image compatibility model is not explicitly enabled for this account", "model")
+	mapped, image := chatGPTWebImageModelID(account, requested)
+	if !image {
+		return chatGPTWebImageModel{}, chatGPTWebImageRequestError("chatgpt_web_image_model_not_allowed", "The requested model is not an image compatibility entry or an image alias", "model")
 	}
 	return chatGPTWebImageModel{RequestedModel: requested, MappedModel: strings.TrimSpace(mapped)}, nil
 }
 
 type chatGPTWebImageSchedulingModelContextKey struct{}
 
-// Scheduling must apply the same opt-in and model authorization as forwarding.
-// An empty ordinary model mapping allows chat, but does not grant web images.
-// Accounts without an explicit web image policy retain their upstream route.
-func chatGPTWebImageSchedulingFailureReason(ctx context.Context, account *Account, requested string) string {
-	if !UsesChatGPTWebImagePolicy(account) {
-		return ""
+func chatGPTWebImageSchedulingModel(ctx context.Context, requested string) string {
+	if IsGPTImageGenerationModel(requested) {
+		return requested
 	}
 	if ctx != nil {
 		if mapped, ok := ctx.Value(chatGPTWebImageSchedulingModelContextKey{}).(string); ok && mapped != "" {
 			requested = mapped
 		}
 	}
+	return requested
+}
+
+// Scheduling and forwarding share the account switch and consent policy.
+func chatGPTWebImageSchedulingFailureReason(ctx context.Context, account *Account, requested string) string {
+	if !UsesChatGPTWebImagePolicy(account) {
+		return ""
+	}
+	requested = chatGPTWebImageSchedulingModel(ctx, requested)
 	if _, err := resolveChatGPTWebImageModel(account, requested); err != nil {
 		if publicErr, ok := err.(*OpenAIImagesUpstreamError); ok {
 			return publicErr.Code
@@ -85,6 +89,10 @@ func chatGPTWebImageSchedulingFailureReason(ctx context.Context, account *Accoun
 		return "chatgpt_web_image_unavailable"
 	}
 	return ""
+}
+
+func chatGPTWebImageOwnsNativeModel(account *Account, model string) bool {
+	return isFreeChatGPTWebImageAccount(account) && IsGPTImageGenerationModel(model) && validateChatGPTWebImageAccount(account) == nil
 }
 
 func isOpenAIImageToolDeclaration(raw any) bool {

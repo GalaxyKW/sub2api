@@ -29,11 +29,15 @@ func webImageAdminTestAccount() *Account {
 		Extra:       map[string]any{AccountExtraChatGPTWebImageEnabled: true, AccountExtraChatGPTWebImageRegularChat: true}}
 }
 
-func cacheAdminWebImageResult(t *testing.T, account *Account, opts AccountTestOptions, prompt string) {
+func cacheAdminWebImageResult(t *testing.T, account *Account, opts AccountTestOptions, prompt string, imageModel ...string) {
 	t.Helper()
 	store, err := configuredWebImageJobStore()
 	require.NoError(t, err)
-	key := adminWebImageTestJobKey(opts.ActorScope, opts.OperationID, account.ID, "paint", prompt)
+	model := "paint"
+	if len(imageModel) > 0 {
+		model = imageModel[0]
+	}
+	key := adminWebImageTestJobKey(opts.ActorScope, opts.OperationID, account.ID, model, prompt)
 	require.NoError(t, writeWebImageJob(filepath.Join(store.dir, key+".json"), webImageJobRecord{State: "complete", BillingID: "web-image:cached-test", Result: chatgptwebimage.Result{Images: []chatgptwebimage.Image{{Bytes: adminTestPNG(t), Format: "png"}}}}))
 }
 
@@ -84,9 +88,12 @@ func TestAccountTestChatGPTWebImageRejectsBeforeUpstream(t *testing.T) {
 	}{
 		{"disabled", "paint", func(a *Account) { a.Extra[AccountExtraChatGPTWebImageEnabled] = false }, "not enabled"},
 		{"no history consent", "paint", func(a *Account) { a.Extra[AccountExtraChatGPTWebImageRegularChat] = false }, "explicit permission"},
-		{"target cannot bypass alias", "gpt-image-2", func(*Account) {}, "not explicitly enabled"},
-		{"unselected new model", "gpt-image-2.5-flare", func(*Account) {}, "not explicitly enabled"},
-		{"empty mapping is not image consent", "gpt-image-2", func(a *Account) { delete(a.Credentials, "model_mapping") }, "not explicitly enabled"},
+		{"unconfigured", "gpt-image-2", func(a *Account) { delete(a.Extra, AccountExtraChatGPTWebImageEnabled) }, "not enabled"},
+		{"invalid switch", "gpt-image-2.5-flare", func(a *Account) { a.Extra[AccountExtraChatGPTWebImageEnabled] = "true" }, "not enabled"},
+		{"empty mapping still requires consent", "gpt-image-2", func(a *Account) {
+			delete(a.Credentials, "model_mapping")
+			delete(a.Extra, AccountExtraChatGPTWebImageRegularChat)
+		}, "explicit permission"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -163,11 +170,11 @@ func TestFetchOpenAIAccountModelsFreeWebImageEligibility(t *testing.T) {
 	svc := &AccountTestService{openaiGatewayService: &OpenAIGatewayService{}}
 	models, err := svc.FetchOpenAIAccountModels(context.Background(), a)
 	require.NoError(t, err)
-	require.ElementsMatch(t, []string{"paint", "gpt-6-luna"}, pickerModelIDs(models))
+	require.ElementsMatch(t, append([]string{"paint", "gpt-6-luna"}, freeWebImageTestModelIDs()...), pickerModelIDs(models))
 	delete(a.Extra, AccountExtraChatGPTWebImageEnabled)
 	models, err = svc.FetchOpenAIAccountModels(context.Background(), a)
 	require.NoError(t, err)
-	require.ElementsMatch(t, []string{"paint", "gpt-6-luna"}, pickerModelIDs(models), "unconfigured Free keeps the original image picker")
+	require.Equal(t, []string{"gpt-6-luna"}, pickerModelIDs(models), "unconfigured Free must not advertise native image tests")
 	a.Extra[AccountExtraChatGPTWebImageEnabled] = false
 	models, err = svc.FetchOpenAIAccountModels(context.Background(), a)
 	require.NoError(t, err)
@@ -189,7 +196,7 @@ func TestAccountTestChatGPTWebImageRejectsInvalidResult(t *testing.T) {
 	}
 }
 
-func TestAccountTestUnconfiguredFreePreservesNativeImageTest(t *testing.T) {
+func TestAccountTestUnconfiguredFreeRejectsNativeImageFallback(t *testing.T) {
 	for _, extra := range []map[string]any{nil, {}, {AccountExtraChatGPTWebImageEnabled: "true"}} {
 		a := webImageAdminTestAccount()
 		a.Extra = extra
@@ -200,9 +207,37 @@ func TestAccountTestUnconfiguredFreePreservesNativeImageTest(t *testing.T) {
 		c, _ := gin.CreateTestContext(rec)
 		c.Request = httptest.NewRequest(http.MethodPost, "/test", nil)
 		err := svc.TestAccountConnection(c, a.ID, "paint", "cat", "")
-		require.ErrorContains(t, err, "No access token available")
-		require.True(t, AccountTestAllowsRecovery(c), "unconfigured image tests retain the original test path")
-		require.NotContains(t, rec.Body.String(), "chatgpt_web")
+		require.ErrorContains(t, err, "not enabled")
+		require.False(t, AccountTestAllowsRecovery(c))
+		require.Contains(t, rec.Body.String(), "chatgpt_web")
+		require.NotContains(t, rec.Body.String(), "Calling Codex")
 		require.Zero(t, repo.clearErrorCalls)
+	}
+}
+
+func TestAccountTestFreeNativeImagesIgnoreChatMappingAndDoNotRecover(t *testing.T) {
+	for _, mapping := range []map[string]any{nil, {"gpt-6-luna": "gpt-6-luna"}, {"gpt-image-2.5-flare": "gpt-6-luna"}} {
+		t.Run("manual_and_scheduled", func(t *testing.T) {
+			t.Setenv("SUB2API_WEB_IMAGE_STATE_DIR", t.TempDir())
+			a := webImageAdminTestAccount()
+			a.Credentials["model_mapping"] = mapping
+			model := "gpt-image-2.5-flare"
+			opts := AccountTestOptions{ActorScope: "admin:5", OperationID: "native-image"}
+			cacheAdminWebImageResult(t, a, opts, defaultOpenAIImageTestPrompt, model)
+			repo := &rateLimitClearRepoStub{getByIDAccount: a}
+			svc := &AccountTestService{accountRepo: repo, openaiGatewayService: &OpenAIGatewayService{}}
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			c.Request = httptest.NewRequest(http.MethodPost, "/test", nil)
+			require.NoError(t, svc.TestAccountConnection(c, a.ID, model, "", "", opts))
+			require.Contains(t, rec.Body.String(), `"provider":"chatgpt_web"`)
+			require.Contains(t, rec.Body.String(), `"success":true`)
+			require.False(t, AccountTestAllowsRecovery(c))
+			result, err := svc.runTestBackground(context.Background(), a.ID, model, opts)
+			require.NoError(t, err)
+			require.Equal(t, "success", result.Status)
+			require.True(t, result.capabilityOnly)
+			require.Zero(t, repo.clearErrorCalls)
+		})
 	}
 }

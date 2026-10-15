@@ -1778,7 +1778,9 @@ func (s *defaultOpenAIAccountScheduler) isAccountRequestCompatibleReason(ctx con
 	}
 	if source, ok := CompositeRouteSourceFromContext(ctx); ok && source == CompositeRouteSourceAccount {
 		if publicModel, modelOK := RequestedPublicModelFromContext(ctx); modelOK && !explicitModelMappingClaims(*account, publicModel) {
-			return false, "account_model_not_owned"
+			if !(req.RequiredImageCapability != "" || OpenAIImagesEndpointFromContext(ctx)) || !chatGPTWebImageOwnsNativeModel(account, publicModel) {
+				return false, "account_model_not_owned"
+			}
 		}
 	}
 	if req.RequirePrivacySet && !account.IsPrivacySet() {
@@ -1812,13 +1814,14 @@ func (s *defaultOpenAIAccountScheduler) isAccountRequestCompatibleReason(ctx con
 	}) {
 		return false, "shadow_parent_unhealthy"
 	}
-	if req.RequestedModel != "" && !account.IsModelSupported(req.RequestedModel) {
-		return false, "model_not_supported"
-	}
-	if req.RequiredImageCapability != "" || OpenAIImagesEndpointFromContext(ctx) {
+	imageRequest := req.RequiredImageCapability != "" || OpenAIImagesEndpointFromContext(ctx)
+	if imageRequest {
 		if reason := chatGPTWebImageSchedulingFailureReason(ctx, account, req.RequestedModel); reason != "" {
 			return false, reason
 		}
+	}
+	if req.RequestedModel != "" && !(imageRequest && isFreeChatGPTWebImageAccount(account)) && !account.IsModelSupported(req.RequestedModel) {
+		return false, "model_not_supported"
 	}
 	if req.GroupID != nil && s != nil && s.service != nil &&
 		s.service.needsUpstreamChannelRestrictionCheck(ctx, req.GroupID) &&

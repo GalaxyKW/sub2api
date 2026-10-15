@@ -8,21 +8,47 @@ The feature depends on ChatGPT web behavior and is experimental.
 ## Enable an account
 
 In account settings, enable **Free web image bridge**, allow creating retained
-regular ChatGPT conversations, and explicitly allow at least one image model in
-the account's model mapping. Choose an allowed image entry as the chat default.
-The API key's group must also allow images. Empty or unrestricted chat mappings
-do not authorize the bridge to generate images.
+regular ChatGPT conversations, and save. The API key's group must also allow
+images. These permissions enable every `gpt-image-*` compatibility entry through
+the web provider, including `gpt-image-1`, `gpt-image-1.5`, `gpt-image-2`,
+`gpt-image-2.5-flare`, and `gpt-image-2.5-sunburst`. There is no separate image
+model allowlist or default-model selector for Free accounts. The account's chat
+model mapping may be empty, unrestricted, or limited to chat models without
+excluding these image entries.
+
+An explicitly configured group model allowlist still applies to client requests
+and model discovery. Allow `gpt-image-*` at the group level to expose the whole
+image family without maintaining individual entries. This does not replace the
+group's separate image-generation permission.
+
+Chat-triggered generation uses `gpt-image-2` as its compatibility entry. A stored
+`chatgpt_web_image_default_model` from an older deployment no longer selects the
+web image route. Existing account image mappings need not be expanded when a
+client selects another `gpt-image-*` entry. Ordinary chat model restrictions
+continue to apply to chat requests.
 
 The bridge setting is independent of the Hosted image tool policy. Accounts that
-have never configured the bridge retain the existing Codex route. Explicitly
-disabling a previously configured bridge prevents it from generating images;
-ordinary chat remains available.
+have not enabled the bridge, including accounts that never configured the
+setting, cannot serve Free-account image requests. Disabling the bridge does
+not redirect those requests to Codex's native image endpoint. The account must
+also permit retained web conversations before it can be selected for web image
+generation. Non-Free accounts retain their existing image routing.
 
 The image model names are compatibility entries. ChatGPT web selects its actual
-image backend; an entry such as `gpt-image-2` does not guarantee that API model.
+image backend; choosing `gpt-image-2` or a `gpt-image-2.5-*` entry does not pin or
+prove use of that API model. All of these entries use the same web generation
+flow. The account test picker exposes the known image compatibility entries
+for eligible Free accounts, and those tests use the same web provider as client
+image requests.
+
 The optional compressed preview displays the result in ordinary chat messages.
 Manual and scheduled account image tests are capability checks and do not
 reactivate paused/error accounts or reset Codex rate-limit/403 state.
+
+Enabling the bridge authorizes its use; it does not guarantee that ChatGPT web
+will accept a particular account's request. Accounts can succeed or fail
+independently. A `model_not_found` error reports an upstream rejection of the
+web conversation model, not a missing selection in the account's image settings.
 
 ## Persistent storage
 

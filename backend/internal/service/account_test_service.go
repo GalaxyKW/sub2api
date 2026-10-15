@@ -233,7 +233,7 @@ func (s *AccountTestService) FetchOpenAIAccountModels(ctx context.Context, accou
 		}
 		for _, model := range openai.DefaultModels {
 			if IsGPTImageGenerationModel(model.ID) && account.IsModelSupported(model.ID) && !seen[model.ID] {
-				if !passthrough && !IsGPTImageGenerationModel(account.GetMappedModel(model.ID)) {
+				if !isFreeChatGPTWebImageAccount(account) && !passthrough && !IsGPTImageGenerationModel(account.GetMappedModel(model.ID)) {
 					continue
 				}
 				payload.Data = append(payload.Data, model)
@@ -269,20 +269,35 @@ func (s *AccountTestService) FetchOpenAIAccountModels(ctx context.Context, accou
 // FilterOpenAIAccountTestModels applies web image eligibility to both discovery
 // and the local fallback picker. It leaves ordinary text/native accounts alone.
 func FilterOpenAIAccountTestModels(account *Account, models []openai.Model) []openai.Model {
-	if !isFreeChatGPTWebImageAccount(account) || !chatGPTWebImageConfigured(account) {
+	if !isFreeChatGPTWebImageAccount(account) {
 		return models
 	}
 	filtered := make([]openai.Model, 0, len(models))
+	seen := make(map[string]bool, len(models))
+	enabled := validateChatGPTWebImageAccount(account) == nil
 	for _, model := range models {
 		if strings.Contains(model.ID, "*") {
 			continue
 		}
-		if IsGPTImageGenerationModel(account.GetMappedModel(model.ID)) {
-			if _, err := resolveChatGPTWebImageModel(account, model.ID); err != nil {
-				continue
-			}
+		if _, image := chatGPTWebImageModelID(account, model.ID); image && !enabled {
+			continue
 		}
 		filtered = append(filtered, model)
+		seen[model.ID] = true
+	}
+	if enabled {
+		for _, model := range openai.DefaultModels {
+			if IsGPTImageGenerationModel(model.ID) && !seen[model.ID] {
+				filtered = append(filtered, model)
+				seen[model.ID] = true
+			}
+		}
+		for alias := range account.GetModelMapping() {
+			if _, image := chatGPTWebImageModelID(account, alias); image && !strings.Contains(alias, "*") && !seen[alias] {
+				filtered = append(filtered, openai.Model{ID: alias, Object: "model", Type: "model", OwnedBy: "openai", DisplayName: openaiCodexDisplayName(alias)})
+				seen[alias] = true
+			}
+		}
 	}
 	return filtered
 }
@@ -837,10 +852,10 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 		testModelID = openai.DefaultTestModel
 	}
 
-	// Keep the public name for the web policy check. Mapping it first would
-	// authorize a target instead of the compatibility entry selected by the admin.
-	mappedTestModel, explicitlyMapped := account.ResolveMappedModel(testModelID)
-	if isFreeChatGPTWebImageAccount(account) && chatGPTWebImageConfigured(account) && (IsGPTImageGenerationModel(mappedTestModel) || (!explicitlyMapped && isOpenAIImageModel(testModelID))) {
+	// Free native image names always select the web provider, even if an old
+	// account mapping points at a text model. Unset/disabled bridges fail here.
+	_, webImageModel := chatGPTWebImageModelID(account, testModelID)
+	if isFreeChatGPTWebImageAccount(account) && webImageModel {
 		if mode != AccountTestModeDefault {
 			return s.sendErrorAndEnd(c, "ChatGPT web image tests require the default test mode")
 		}

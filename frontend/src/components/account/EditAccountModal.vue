@@ -320,7 +320,7 @@
 
             <!-- Whitelist Mode -->
             <div v-if="modelRestrictionMode === 'whitelist'">
-              <ModelWhitelistSelector v-model="allowedModels" :model-mappings="modelMappings" :platform="account?.platform || 'anthropic'" :account-id="account?.id" :web-image-compatibility="isFreeWebImageEligible" />
+              <ModelWhitelistSelector v-model="allowedModels" :model-mappings="modelMappings" :platform="account?.platform || 'anthropic'" :account-id="account?.id" :web-image-compatibility="isFreeWebImageEligible" :web-image-bridge-enabled="webImageEnabled" />
               <p class="text-xs text-gray-500 dark:text-gray-400">
                 {{ t('admin.accounts.selectedModels', { count: allowedModels.length }) }}
                 <span v-if="allowedModels.length === 0 && modelMappings.length === 0">{{
@@ -842,7 +842,7 @@
 
           <!-- Whitelist Mode -->
           <div v-if="modelRestrictionMode === 'whitelist'">
-            <ModelWhitelistSelector v-model="allowedModels" :model-mappings="modelMappings" :platform="account?.platform || 'anthropic'" :account-id="account?.id" :web-image-compatibility="isFreeWebImageEligible" />
+            <ModelWhitelistSelector v-model="allowedModels" :model-mappings="modelMappings" :platform="account?.platform || 'anthropic'" :account-id="account?.id" :web-image-compatibility="isFreeWebImageEligible" :web-image-bridge-enabled="webImageEnabled" />
             <p class="text-xs text-gray-500 dark:text-gray-400">
               {{ t('admin.accounts.selectedModels', { count: allowedModels.length }) }}
               <span v-if="allowedModels.length === 0 && modelMappings.length === 0">{{
@@ -1076,7 +1076,7 @@
 
           <!-- Whitelist Mode -->
           <div v-if="modelRestrictionMode === 'whitelist'">
-            <ModelWhitelistSelector v-model="allowedModels" :model-mappings="modelMappings" :platform="account?.platform || 'anthropic'" :account-id="account?.id" :web-image-compatibility="isFreeWebImageEligible" />
+            <ModelWhitelistSelector v-model="allowedModels" :model-mappings="modelMappings" :platform="account?.platform || 'anthropic'" :account-id="account?.id" :web-image-compatibility="isFreeWebImageEligible" :web-image-bridge-enabled="webImageEnabled" />
             <p class="text-xs text-gray-500 dark:text-gray-400">
               {{ t('admin.accounts.selectedModels', { count: allowedModels.length }) }}
               <span v-if="allowedModels.length === 0 && modelMappings.length === 0">{{
@@ -1930,8 +1930,6 @@
         @update:enabled="setWebImageEnabled"
         v-model:regular-chat="webImageRegularChat"
         v-model:markdown-preview="webImageMarkdownPreview"
-        v-model:default-model="webImageDefaultModel"
-        :models="webImageModels"
       />
 
       <!-- OpenAI Codex hosted image_generation bridge policy -->
@@ -3272,7 +3270,7 @@ import ProxyAdBanner from '@/components/common/ProxyAdBanner.vue'
 import GroupSelector from '@/components/common/GroupSelector.vue'
 import ModelWhitelistSelector from '@/components/account/ModelWhitelistSelector.vue'
 import FreeWebImageSettings from '@/components/account/FreeWebImageSettings.vue'
-import { DEFAULT_WEB_IMAGE_MODEL, hasWebImageConfiguration, readWebImageSettings, webImageModelOptions } from '@/components/account/webImageBridge'
+import { hasWebImageConfiguration, readWebImageSettings } from '@/components/account/webImageBridge'
 import QuotaLimitCard from '@/components/account/QuotaLimitCard.vue'
 import GrokBaseUrlPresets from '@/components/account/GrokBaseUrlPresets.vue'
 import CnBaseUrlPresets from '@/components/account/CnBaseUrlPresets.vue'
@@ -3884,10 +3882,8 @@ function setWebImageEnabled(enabled: boolean) {
 }
 const webImageRegularChat = ref(false)
 const webImageMarkdownPreview = ref(true)
-const webImageDefaultModel = ref(DEFAULT_WEB_IMAGE_MODEL)
 const isFreeWebImageEligible = computed(() => props.account?.platform === 'openai' &&
   props.account?.type === 'oauth' && !isSparkShadow.value && editPlanType.value.trim().toLowerCase() === 'free')
-const webImageModels = computed(() => webImageModelOptions(buildModelRestrictionMapping(), webImageDefaultModel.value))
 
 type AnthropicAPIKeyAuthScheme = 'x_api_key' | 'authorization_bearer'
 const anthropicPassthroughEnabled = ref(false)
@@ -4389,7 +4385,6 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   webImageEnabled.value = webImageSettings.enabled
   webImageRegularChat.value = webImageSettings.regularChat
   webImageMarkdownPreview.value = webImageSettings.markdownPreview
-  webImageDefaultModel.value = webImageSettings.defaultModel
   anthropicPassthroughEnabled.value = false
   anthropicAPIKeyAuthScheme.value = 'x_api_key'
   webSearchEmulationMode.value = 'default'
@@ -5358,15 +5353,9 @@ const handleSubmit = async () => {
   if (!props.account) return
   const accountID = props.account.id
 
-  if (isFreeWebImageEligible.value && webImageEnabled.value && webImageModels.value.length > 0) {
-    if (!webImageModels.value.includes(webImageDefaultModel.value)) {
-      appStore.showError(t('admin.accounts.openai.webImageInvalidDefault'))
-      return
-    }
-    if (!webImageRegularChat.value) {
-      appStore.showError(t('admin.accounts.openai.webImageConsentRequired'))
-      return
-    }
+  if (isFreeWebImageEligible.value && webImageEnabled.value && !webImageRegularChat.value) {
+    appStore.showError(t('admin.accounts.openai.webImageConsentRequired'))
+    return
   }
 
   if (form.status !== 'active' && form.status !== 'inactive' && form.status !== 'error') {
@@ -6010,7 +5999,6 @@ const handleSubmit = async () => {
         newExtra.chatgpt_web_image_enabled = webImageEnabled.value
         newExtra.chatgpt_web_image_regular_chat = webImageRegularChat.value
         newExtra.chatgpt_web_image_markdown_preview = webImageMarkdownPreview.value
-        newExtra.chatgpt_web_image_default_model = webImageDefaultModel.value
       }
 
 		delete newExtra.codex_image_generation_bridge_enabled

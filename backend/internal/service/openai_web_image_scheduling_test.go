@@ -28,11 +28,11 @@ func TestWebImageSchedulingSkipsUnauthorizedAccountsBeforeAcquiringSlots(t *test
 			name, model string
 			change      func(*Account)
 		}{
-			{"empty_mapping", "gpt-image-2", func(a *Account) { a.Credentials["model_mapping"] = map[string]any{} }},
+			{"unconfigured", "gpt-image-2", func(a *Account) { delete(a.Extra, AccountExtraChatGPTWebImageEnabled) }},
 			{"disabled", "gpt-image-2", func(a *Account) { a.Extra[AccountExtraChatGPTWebImageEnabled] = false }},
 			{"no_consent", "gpt-image-2", func(a *Account) { delete(a.Extra, AccountExtraChatGPTWebImageRegularChat) }},
-			{"mapped_to_text", "gpt-image-2", func(a *Account) { a.Credentials["model_mapping"] = map[string]any{"gpt-image-2": "gpt-6-luna"} }},
-			{"unauthorized_flare", "gpt-image-2.5-flare", func(a *Account) { a.Credentials["model_mapping"] = nil }},
+			{"invalid_switch", "gpt-image-2", func(a *Account) { a.Extra[AccountExtraChatGPTWebImageEnabled] = "true" }},
+			{"unconfigured_flare", "gpt-image-2.5-flare", func(a *Account) { a.Extra = nil; a.Credentials["model_mapping"] = nil }},
 		} {
 			for _, sticky := range []bool{false, true} {
 				name := mode.name + "/" + tc.name
@@ -77,8 +77,9 @@ func TestWebImageSchedulingNoEligibleAccountDoesNotFallBackToUnauthorizedOAuth(t
 	for _, advanced := range []string{"false", "true"} {
 		t.Run(advanced, func(t *testing.T) {
 			resetOpenAIAdvancedSchedulerSettingCacheForTest()
-			a := webImageSchedulingAccount(270)
+			a := webImageSchedulingAccount(273)
 			a.Credentials["model_mapping"] = nil
+			a.Extra = nil
 			var acquired []int64
 			svc := &OpenAIGatewayService{
 				accountRepo: schedulerTestOpenAIAccountRepo{accounts: []Account{a}}, cfg: &config.Config{},
@@ -102,8 +103,12 @@ func TestWebImageSchedulingPreservesAliasesLegacyAccountsAndOrdinaryChat(t *test
 	}{
 		{"mapped_alias", "poster", true, func(a *Account) { a.Credentials["model_mapping"] = map[string]any{"poster": "gpt-image-2.5-flare"} }},
 		{"mapped_wildcard", "gpt-image-2.5-flare", true, func(a *Account) { a.Credentials["model_mapping"] = map[string]any{"gpt-image-*": "gpt-image-2"} }},
-		{"legacy_free_oauth", "gpt-image-2", true, func(a *Account) {
-			delete(a.Extra, AccountExtraChatGPTWebImageEnabled)
+		{"enabled_empty_mapping", "gpt-image-2", true, func(a *Account) { a.Credentials["model_mapping"] = nil }},
+		{"enabled_chat_only_mapping", "gpt-image-2.5-flare", true, func(a *Account) { a.Credentials["model_mapping"] = map[string]any{"gpt-6-luna": "gpt-6-luna"} }},
+		{"enabled_image_to_text_mapping", "gpt-image-2", true, func(a *Account) { a.Credentials["model_mapping"] = map[string]any{"gpt-image-2": "gpt-6-luna"} }},
+		{"nonfree_legacy", "gpt-image-2", true, func(a *Account) {
+			a.Extra = nil
+			a.Credentials["plan_type"] = "pro"
 			a.Credentials["model_mapping"] = nil
 		}},
 		{"unrestricted_chat", "gpt-6-luna", false, func(a *Account) { a.Credentials["model_mapping"] = nil }},

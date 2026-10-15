@@ -255,37 +255,56 @@ describe('AccountTestModal', () => {
     wrapper.unmount()
   })
 
-  it('未配置桥接的 Free 账号保留原有图片测试，不显示网页标识或禁用测试', async () => {
+  it('未配置桥接的 Free 账号禁用图片测试，不回退原生图片', async () => {
     getAvailableModels.mockResolvedValue([{ id: 'gpt-image-2', display_name: 'GPT Image 2' }])
-    global.fetch = vi.fn().mockResolvedValue(createStreamResponse(['data: {"type":"test_complete","success":true}\n']))
     const account = freeAccount()
     delete (account.extra as Record<string, unknown>).chatgpt_web_image_enabled
     const wrapper = mountModal(account)
     await wrapper.setProps({ show: true })
     await flushPromises()
-    expect(wrapper.find('[data-testid="free-web-image-test-path"]').exists()).toBe(false)
-    expect(wrapper.find('[data-testid="free-web-image-test-disabled"]').exists()).toBe(false)
-    expect((wrapper.vm as any).modelOptionsForMode[0].display_name).toBe('GPT Image 2')
-    expect((wrapper.vm as any).canStartTest).toBe(true)
+    expect(wrapper.find('[data-testid="free-web-image-test-path"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="free-web-image-test-disabled"]').exists()).toBe(true)
+    expect((wrapper.vm as any).canStartTest).toBe(false)
     await (wrapper.vm as any).startTest()
-    expect(global.fetch).toHaveBeenCalledTimes(1)
-    expect(JSON.parse((global.fetch as any).mock.calls[0][1].body)).toMatchObject({ model_id: 'gpt-image-2', mode: 'default' })
+    expect(global.fetch).not.toHaveBeenCalled()
     wrapper.unmount()
   })
 
-  it('图片名称显式映射为文本时保留普通测试，不展示网页图片标识或阻断', async () => {
-    getAvailableModels.mockResolvedValue([{ id: 'gpt-image-custom', display_name: 'Text alias' }])
-    global.fetch = vi.fn().mockResolvedValue(createStreamResponse(['data: {"type":"test_complete","success":true}\n']))
+  it('Free 图片入口优先于旧文本映射，普通聊天测试仍保持原语义', async () => {
+    getAvailableModels.mockResolvedValue([{ id: 'gpt-image-custom', display_name: 'Legacy alias' }, { id: 'gpt-6-luna', display_name: 'GPT 6 Luna' }])
+    global.fetch = vi.fn().mockImplementation(async () => createStreamResponse(['data: {"type":"test_complete","success":true}\n']))
     const account = freeAccount()
-    account.credentials.model_mapping = { 'gpt-image-custom': 'gpt-5.1' } as any
+    account.credentials.model_mapping = { 'gpt-image-custom': 'gpt-5.1', 'gpt-6-luna': 'gpt-6-luna' } as any
     const wrapper = mountModal(account)
     await wrapper.setProps({ show: true })
     await flushPromises()
-    expect(wrapper.find('[data-testid="free-web-image-test-path"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="free-web-image-test-path"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="free-web-image-test-disabled"]').exists()).toBe(false)
+    expect((wrapper.vm as any).supportsOpenAIImageTest).toBe(true)
+    expect((wrapper.vm as any).modelOptionsForMode[0].display_name).toContain('admin.accounts.openai.webImageEntryBadge')
+    ;(wrapper.vm as any).testMode = 'compact'
+    await (wrapper.vm as any).startTest()
+    expect(JSON.parse((global.fetch as any).mock.calls[0][1].body)).toMatchObject({ model_id: 'gpt-image-custom', mode: 'default' })
+    ;(wrapper.vm as any).selectedModelId = 'gpt-6-luna'
+    await flushPromises()
+    expect(wrapper.find('[data-testid="free-web-image-test-path"]').exists()).toBe(false)
     expect((wrapper.vm as any).supportsOpenAIImageTest).toBe(false)
-    expect((wrapper.vm as any).modelOptionsForMode[0].display_name).toBe('Text alias')
-    expect((wrapper.vm as any).canStartTest).toBe(true)
+    expect((wrapper.vm as any).modelOptionsForMode[1].display_name).toBe('GPT 6 Luna')
+    await (wrapper.vm as any).startTest()
+    expect(JSON.parse((global.fetch as any).mock.calls[1][1].body)).toMatchObject({ model_id: 'gpt-6-luna', mode: 'compact', prompt: '' })
+    wrapper.unmount()
+  })
+
+  it('非Free账号图片名称映射到文本时保持普通测试', async () => {
+    getAvailableModels.mockResolvedValue([{ id: 'gpt-image-custom', display_name: 'Text alias' }])
+    global.fetch = vi.fn().mockResolvedValue(createStreamResponse(['data: {"type":"test_complete","success":true}\n']))
+    const account = freeAccount()
+    account.credentials = { ...account.credentials, plan_type: 'plus', model_mapping: { 'gpt-image-custom': 'gpt-5.1' } as any }
+    const wrapper = mountModal(account)
+    await wrapper.setProps({ show: true })
+    await flushPromises()
+    expect((wrapper.vm as any).supportsOpenAIImageTest).toBe(false)
+    expect(wrapper.find('[data-testid="free-web-image-test-path"]').exists()).toBe(false)
     ;(wrapper.vm as any).testMode = 'compact'
     await (wrapper.vm as any).startTest()
     expect(JSON.parse((global.fetch as any).mock.calls[0][1].body)).toMatchObject({ model_id: 'gpt-image-custom', mode: 'compact' })
@@ -304,16 +323,25 @@ describe('AccountTestModal', () => {
     wrapper.unmount()
   })
 
-  it('Free 空模型映射不代表允许网页图片', async () => {
-    getAvailableModels.mockResolvedValue([{ id: 'gpt-image-2', display_name: 'gpt-image-2' }])
+  it.each([{}, { 'gpt-6-luna': 'gpt-6-luna' }])('Free所有图片入口无需账号图片模型授权：%o', async mapping => {
+    const images = ['gpt-image-1', 'gpt-image-1.5', 'gpt-image-2', 'gpt-image-2.5-flare', 'gpt-image-2.5-sunburst']
+    getAvailableModels.mockResolvedValue(images.map(id => ({ id, display_name: id })))
+    global.fetch = vi.fn().mockImplementation(async () => createStreamResponse(['data: {"type":"test_complete","success":true}\n']))
     const account = freeAccount()
-    account.credentials.model_mapping = {} as any
+    account.credentials.model_mapping = mapping as any
     const wrapper = mountModal(account)
     await wrapper.setProps({ show: true })
     await flushPromises()
-    expect(wrapper.find('[data-testid="free-web-image-test-disabled"]').exists()).toBe(true)
-    await (wrapper.vm as any).startTest()
-    expect(global.fetch).not.toHaveBeenCalled()
+    expect((wrapper.vm as any).modelOptionsForMode.map((model: { id: string }) => model.id)).toEqual(images)
+    for (const image of images) {
+      ;(wrapper.vm as any).selectedModelId = image
+      await flushPromises()
+      expect(wrapper.find('[data-testid="free-web-image-test-disabled"]').exists()).toBe(false)
+      expect((wrapper.vm as any).canStartTest).toBe(true)
+      await (wrapper.vm as any).startTest()
+      expect(JSON.parse((global.fetch as any).mock.calls.at(-1)[1].body)).toMatchObject({ model_id: image, mode: 'default' })
+    }
+    expect(global.fetch).toHaveBeenCalledTimes(images.length)
     wrapper.unmount()
   })
 

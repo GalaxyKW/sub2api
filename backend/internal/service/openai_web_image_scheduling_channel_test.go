@@ -14,11 +14,12 @@ func TestWebImageSchedulingAuthorizesTheChannelMappedModel(t *testing.T) {
 	for _, advanced := range []string{"false", "true"} {
 		t.Run(advanced, func(t *testing.T) {
 			resetOpenAIAdvancedSchedulerSettingCacheForTest()
-			invalid, allowed := webImageSchedulingAccount(270), webImageSchedulingAccount(239)
-			// Both accounts claim the public model, but only the second account
-			// authorizes the compatibility model that forwarding will receive.
+			allowed, invalid := webImageSchedulingAccount(270), webImageSchedulingAccount(273)
+			// The enabled Free account accepts the image family without a mapping;
+			// the unconfigured Free account cannot fall back to native Codex.
 			allowed.Priority = 10
-			allowed.Credentials["model_mapping"] = map[string]any{"gpt-image-2": "gpt-image-2", "gpt-image-1.5": "gpt-image-1.5"}
+			allowed.Credentials["model_mapping"] = nil
+			invalid.Extra = nil
 			channel := Channel{ID: 1, Status: StatusActive, GroupIDs: []int64{101},
 				ModelMapping: map[string]map[string]string{PlatformOpenAI: {"gpt-image-2": "gpt-image-1.5"}}}
 			svc := &OpenAIGatewayService{

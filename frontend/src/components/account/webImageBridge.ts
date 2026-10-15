@@ -1,11 +1,5 @@
 import type { Account } from '@/types'
 
-export const DEFAULT_WEB_IMAGE_MODEL = 'gpt-image-2'
-export const WEB_IMAGE_MODELS = [
-  'gpt-image-1', 'gpt-image-1.5', 'gpt-image-2',
-  'gpt-image-2.5-flare', 'gpt-image-2.5-sunburst'
-]
-
 export function isFreeWebImageAccount(account: Account | null | undefined): boolean {
   return account?.platform === 'openai' && account.type === 'oauth' &&
     account.parent_account_id == null &&
@@ -20,16 +14,12 @@ export function readWebImageSettings(extra?: Record<string, unknown>) {
   return {
     enabled: extra?.chatgpt_web_image_enabled === true,
     regularChat: extra?.chatgpt_web_image_regular_chat === true,
-    markdownPreview: extra?.chatgpt_web_image_markdown_preview !== false,
-    defaultModel: typeof extra?.chatgpt_web_image_default_model === 'string' && extra.chatgpt_web_image_default_model.trim()
-      ? extra.chatgpt_web_image_default_model.trim()
-      : DEFAULT_WEB_IMAGE_MODEL
+    markdownPreview: extra?.chatgpt_web_image_markdown_preview !== false
   }
 }
 
-// Web images require explicit authorization even when an empty text-model
-// mapping otherwise means unrestricted. Prefer exact mappings, then the
-// longest trailing-star match, matching the account resolver on the server.
+// Prefer exact mappings, then the longest trailing-star match, matching
+// the account resolver for ordinary tests and custom image aliases.
 function resolveConfiguredModel(mapping: unknown, publicID: string): string | null {
   if (!mapping || typeof mapping !== 'object' || Array.isArray(mapping)) return null
   const entries = Object.entries(mapping).filter((entry): entry is [string, string] => typeof entry[1] === 'string')
@@ -40,22 +30,10 @@ function resolveConfiguredModel(mapping: unknown, publicID: string): string | nu
   return found ? found[1].trim() : null
 }
 
-export function resolveWebImageAlias(mapping: unknown, publicID: string): string | null {
-  const target = resolveConfiguredModel(mapping, publicID)
-  return target?.toLowerCase().startsWith('gpt-image-') ? target : null
-}
-
-// The resolved target determines the test kind. An image-looking public name
-// mapped to a text model must remain an ordinary account test.
-export function isOpenAIImageTestModel(mapping: unknown, publicID: string): boolean {
-  const target = resolveConfiguredModel(mapping, publicID) ?? publicID
-  return target.trim().toLowerCase().startsWith('gpt-image-')
-}
-
-export function webImageModelOptions(mapping: unknown, defaultModel = DEFAULT_WEB_IMAGE_MODEL): string[] {
-  const named = mapping && typeof mapping === 'object' && !Array.isArray(mapping)
-    ? Object.keys(mapping).filter(name => !name.includes('*'))
-    : []
-  return [...new Set([...WEB_IMAGE_MODELS, defaultModel, ...named])]
-    .filter(name => Boolean(name) && resolveWebImageAlias(mapping, name) !== null)
+// Free accounts use every gpt-image-* name as a web compatibility entry,
+// regardless of legacy mappings. Other accounts still test the mapped target.
+export function isOpenAIImageTestModel(mapping: unknown, publicID: string, freeWebImage = false): boolean {
+  const isImageName = (name: string) => name.trim().toLowerCase().startsWith('gpt-image-')
+  if (freeWebImage && isImageName(publicID)) return true
+  return isImageName(resolveConfiguredModel(mapping, publicID) ?? publicID)
 }

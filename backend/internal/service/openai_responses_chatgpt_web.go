@@ -25,6 +25,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 	"golang.org/x/image/draw"
 )
 
@@ -35,14 +36,12 @@ var webImagePreviewPattern = regexp.MustCompile(`!\[Generated image\]\(data:imag
 
 type webImageBridgeContextKey struct{}
 
-// ShouldBridgeChatGPTWebResponses reports whether this request uses the opted-in
-// web image policy, including cleanup for explicitly disabled Free accounts.
+// ShouldBridgeChatGPTWebResponses includes disabled/unconfigured Free accounts
+// so their image tools cannot fall back to native Codex generation.
 func ShouldBridgeChatGPTWebResponses(ctx context.Context, c *gin.Context, account *Account) bool {
 	if ctx.Value(webImageBridgeContextKey{}) != nil || !UsesChatGPTWebImagePolicy(account) || isOpenAIResponsesCompactPath(c) {
 		return false
 	}
-	// Explicitly disabled Free accounts still clean up bridge history and image
-	// tools. Unconfigured accounts keep the original Hosted/Responses path.
 	return true
 }
 
@@ -134,22 +133,91 @@ func validateWebImageToolParameters(tool map[string]any) error {
 }
 
 func prepareWebImageResponsesForAccount(body []byte, account *Account, groupAllowed bool) ([]byte, *chatGPTWebImageModel, error) {
+	// Resolve a public image alias before deciding whether this is an explicit
+	// image-only request. Leaving it for inner Forward would recreate a hosted
+	// tool after this adapter has already selected the local web tool.
+	topModel := strings.TrimSpace(gjson.GetBytes(body, "model").String())
+	imageAlias := ""
+	if topModel != "" && !IsGPTImageGenerationModel(topModel) {
+		if mapped, image := chatGPTWebImageModelID(account, topModel); image {
+			var err error
+			body, err = sjson.SetBytes(body, "model", mapped)
+			if err != nil {
+				return nil, nil, err
+			}
+			imageAlias = topModel
+		}
+	}
 	requested, explicit, err := requestedChatGPTWebImageModel(body)
 	if err != nil {
 		return nil, nil, err
 	}
 	selection, policyErr := resolveChatGPTWebImageModel(account, requested)
+	if policyErr == nil && imageAlias != "" {
+		selection.RequestedModel = imageAlias
+	}
 	if !groupAllowed {
 		policyErr = chatGPTWebImageRequestError("image_generation_disabled", ImageGenerationPermissionMessage(), "tools")
 	}
 	if explicit && policyErr != nil {
 		return nil, nil, policyErr
 	}
+	// The web adapter cannot reconstruct previous_response_id history. Keep
+	// ordinary text continuations working without offering an unusable tool.
+	if !explicit && gjson.GetBytes(body, "previous_response_id").String() != "" {
+		prepared, err := prepareWebImageResponses(body, false)
+		return prepared, nil, err
+	}
 	prepared, err := prepareWebImageResponses(body, policyErr == nil)
 	if err != nil || policyErr != nil {
 		return prepared, nil, err
 	}
 	return prepared, &selection, nil
+}
+
+// webImageResponsesPlannerAccount isolates the temporary planner policy from
+// the persisted account and its cached mappings. An image-only request uses a
+// fixed text driver, even when a legacy wildcard maps every name to an image.
+// Ordinary text requests retain their configured text-to-text mapping.
+func webImageResponsesPlannerAccount(account *Account, originalBody, preparedBody []byte) (*Account, *OpenAIImagesUpstreamError) {
+	cloned := *account
+	cloned.Extra = make(map[string]any, len(account.Extra)+1)
+	for key, value := range account.Extra {
+		cloned.Extra[key] = value
+	}
+	cloned.Extra[featureKeyCodexImageGenerationBridge] = false
+	originalModel := gjson.GetBytes(originalBody, "model").String()
+	if _, imageOnly := chatGPTWebImageModelID(&cloned, originalModel); imageOnly {
+		mapping := make(map[string]any, len(cloned.GetModelMapping())+1)
+		for name, target := range cloned.GetModelMapping() {
+			mapping[name] = target
+		}
+		plannerModel := strings.TrimSpace(gjson.GetBytes(preparedBody, "model").String())
+		mapping[plannerModel] = plannerModel
+		cloned.Credentials = make(map[string]any, len(account.Credentials)+1)
+		for key, value := range account.Credentials {
+			cloned.Credentials[key] = value
+		}
+		cloned.Credentials["model_mapping"] = mapping
+		cloned.modelMappingCacheReady = false
+	}
+	if err := validateWebImageResponsesPlannerRequest(&cloned, preparedBody); err != nil {
+		return nil, err
+	}
+	return &cloned, nil
+}
+
+// Reject a malformed internal planner before transport. In particular, an
+// invalid driver override or a non-GPT media mapping cannot escape to the
+// native image path merely because the bridge recursion marker is present.
+func validateWebImageResponsesPlannerRequest(account *Account, body []byte) *OpenAIImagesUpstreamError {
+	model := strings.TrimSpace(gjson.GetBytes(body, "model").String())
+	billingModel, upstreamModel := resolveOpenAIForwardMappedModels(account, model, false)
+	if model == "" || isOpenAIImageGenerationModel(model) || isOpenAIImageGenerationModel(billingModel) || isOpenAIImageGenerationModel(upstreamModel) ||
+		openAIRequestBodyHasImageGenerationDeclaration(body) || openAIJSONToolChoiceSelectsExplicitImageGeneration(gjson.GetBytes(body, "tool_choice")) {
+		return chatGPTWebImageRequestError("chatgpt_web_image_invalid_planner", "The web image planner requires a text model and cannot use native image tools", "model")
+	}
+	return nil
 }
 
 // prepareWebImageResponses preserves non-image tools. A declaration only makes
@@ -162,6 +230,12 @@ func prepareWebImageResponses(body []byte, imagePermission ...bool) ([]byte, err
 	}
 	if request == nil {
 		return nil, errors.New("responses request must be a JSON object")
+	}
+	if topModel, _ := request["model"].(string); allowImage && IsGPTImageGenerationModel(topModel) {
+		// Normalize the driver and parameter shape before replacing the hosted
+		// tool below. Otherwise inner forwarding would reinsert a native image
+		// tool merely because it still saw an image-only top-level model.
+		normalizeOpenAIResponsesImageOnlyModel(request)
 	}
 	if id, _ := request["previous_response_id"].(string); id != "" && allowImage {
 		return nil, errors.New("experimental web images require explicit Responses history; previous_response_id is not yet supported")
@@ -197,7 +271,8 @@ func prepareWebImageResponses(body []byte, imagePermission ...bool) ([]byte, err
 		})
 	}
 	request["tools"] = filtered
-	if openAIJSONToolChoiceSelectsExplicitImageGeneration(gjson.GetBytes(body, "tool_choice")) {
+	choiceJSON, _ := json.Marshal(request["tool_choice"])
+	if openAIJSONToolChoiceSelectsExplicitImageGeneration(gjson.ParseBytes(choiceJSON)) {
 		if allowImage {
 			request["tool_choice"] = map[string]any{"type": "function", "name": webImageFunctionName}
 		} else {
@@ -208,7 +283,7 @@ func prepareWebImageResponses(body []byte, imagePermission ...bool) ([]byte, err
 	if allowImage {
 		request["instructions"] = instructions + "\nThe gateway supplies the server-side sub2api_web_image tool for text-to-image generation. When the user asks for a raster image, call that tool with the requested visual description. The server executes it; do not use shell scripts, SVG, or unavailable local image tools as a substitute. For ordinary requests do not call it. Image editing is not supported by this experimental provider."
 	} else {
-		request["instructions"] = instructions + "\nImage generation is not enabled for this account's configured image compatibility model. Answer ordinary requests normally. If asked to generate an image, explain that image generation is unavailable; do not use unavailable image tools or shell commands as a substitute."
+		request["instructions"] = instructions + "\nWeb image generation is not enabled for this account or group. Answer ordinary requests normally. If asked to generate an image, explain that image generation is unavailable; do not use unavailable image tools or shell commands as a substitute."
 	}
 	// The provider is selected explicitly by the server operator. store controls
 	// the Responses service, while regular web conversation consent is a separate
@@ -270,6 +345,11 @@ func (s *OpenAIGatewayService) forwardChatGPTWebResponses(ctx context.Context, c
 		c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"type": "invalid_request_error", "message": err.Error()}})
 		return nil, err
 	}
+	planner, plannerErr := webImageResponsesPlannerAccount(account, body, prepared)
+	if plannerErr != nil {
+		writeOpenAIImagesUpstreamErrorResponse(c, plannerErr)
+		return nil, plannerErr
+	}
 	var original map[string]any
 	_ = json.Unmarshal(body, &original)
 	stream, _ := original["stream"].(bool)
@@ -285,21 +365,15 @@ func (s *OpenAIGatewayService) forwardChatGPTWebResponses(ctx context.Context, c
 			writeOpenAIImagesUpstreamErrorResponse(c, publicErr)
 		}
 	}
-	// Reuse the existing OAuth transforms, transport and text error handling.
-	// The cloned policy avoids reinjecting a hosted image tool on Free accounts.
-	cloned := *account
-	cloned.Extra = make(map[string]any, len(account.Extra)+1)
-	for key, value := range account.Extra {
-		cloned.Extra[key] = value
-	}
-	cloned.Extra[featureKeyCodexImageGenerationBridge] = false
+	// Reuse the existing OAuth transforms, transport and text error handling
+	// with the request-scoped planner account prepared above.
 	capture := newWebImageCaptureWriter(ctx)
 	defer capture.Close()
 	capture.stream = live
 	inner := c.Copy()
 	inner.Writer = capture
 	inner.Request = c.Request.Clone(ctx)
-	result, err := s.Forward(context.WithValue(ctx, webImageBridgeContextKey{}, true), inner, &cloned, prepared)
+	result, err := s.Forward(context.WithValue(ctx, webImageBridgeContextKey{}, true), inner, planner, prepared)
 	if err != nil {
 		if live != nil && live.Started() {
 			live.Fail(&OpenAIImagesUpstreamError{ErrorType: "upstream_error", Code: "upstream_response_failed", Message: "The upstream Responses turn did not complete"})

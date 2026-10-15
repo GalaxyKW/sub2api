@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { hasWebImageConfiguration, isFreeWebImageAccount, isOpenAIImageTestModel, readWebImageSettings, resolveWebImageAlias, webImageModelOptions } from '../webImageBridge'
+import { hasWebImageConfiguration, isFreeWebImageAccount, isOpenAIImageTestModel, readWebImageSettings } from '../webImageBridge'
 import type { Account } from '@/types'
 
 const free = { platform: 'openai', type: 'oauth', parent_account_id: null, credentials: { plan_type: ' Free ' } } as Account
@@ -20,15 +20,19 @@ describe('Free web image configuration', () => {
     expect(hasWebImageConfiguration({ chatgpt_web_image_enabled: false })).toBe(true)
   })
 
-  it('keeps absent settings disabled and uses the legacy default image entry', () => {
-    expect(readWebImageSettings()).toEqual({ enabled: false, regularChat: false, markdownPreview: true, defaultModel: 'gpt-image-2' })
-    expect(readWebImageSettings({ chatgpt_web_image_enabled: false, chatgpt_web_image_regular_chat: true, chatgpt_web_image_markdown_preview: false, chatgpt_web_image_default_model: ' custom-image ' })).toEqual({ enabled: false, regularChat: true, markdownPreview: false, defaultModel: 'custom-image' })
+  it('keeps absent settings disabled and ignores the retired default image selection', () => {
+    expect(readWebImageSettings()).toEqual({ enabled: false, regularChat: false, markdownPreview: true })
+    expect(readWebImageSettings({ chatgpt_web_image_enabled: false, chatgpt_web_image_regular_chat: true, chatgpt_web_image_markdown_preview: false, chatgpt_web_image_default_model: ' custom-image ' })).toEqual({ enabled: false, regularChat: true, markdownPreview: false })
   })
 
-  it('requires explicit image authorization and exposes permitted aliases', () => {
-    expect(webImageModelOptions({})).toEqual([])
-    expect(webImageModelOptions(undefined)).toEqual([])
-    expect(webImageModelOptions({ 'gpt-6-luna': 'gpt-6-luna', illustration: 'gpt-image-2.5-flare' })).toEqual(['illustration'])
+  it('treats every Free image name as a web entry regardless of model authorization or legacy mappings', () => {
+    for (const mapping of [undefined, {}, { 'gpt-6-luna': 'gpt-6-luna' }, { 'gpt-image-*': 'gpt-6-luna' }]) {
+      for (const image of ['gpt-image-1', 'gpt-image-1.5', 'gpt-image-2', 'gpt-image-2.5-flare', 'gpt-image-2.5-sunburst', 'gpt-image-future']) {
+        expect(isOpenAIImageTestModel(mapping, image, true)).toBe(true)
+      }
+      expect(isOpenAIImageTestModel(mapping, 'gpt-6-luna', true)).toBe(false)
+    }
+    expect(isOpenAIImageTestModel({ illustration: 'gpt-image-2' }, 'illustration', true)).toBe(true)
   })
 
   it('uses the mapped target when choosing image versus text account tests', () => {
@@ -39,12 +43,10 @@ describe('Free web image configuration', () => {
     expect(isOpenAIImageTestModel({ '*': 'gpt-image-2', 'gpt-image-custom': 'gpt-5.1' }, 'gpt-image-custom')).toBe(false)
   })
 
-  it('resolves exact mappings before the longest trailing wildcard', () => {
-    const mapping = { '*': 'gpt-image-1', 'gpt-image-*': 'gpt-image-2', 'gpt-image-2.5-*': 'gpt-image-2.5-flare', 'gpt-image-2': 'gpt-6-luna' }
-    expect(resolveWebImageAlias(mapping, 'gpt-image-2')).toBeNull()
-    expect(resolveWebImageAlias(mapping, 'gpt-image-2.5-sunburst')).toBe('gpt-image-2.5-flare')
-    expect(resolveWebImageAlias(mapping, 'gpt-image-1.5')).toBe('gpt-image-2')
-    expect(webImageModelOptions(mapping)).toContain('gpt-image-2.5-sunburst')
-    expect(webImageModelOptions(mapping)).not.toContain('gpt-image-2')
+  it('resolves aliases using exact mappings before the longest trailing wildcard', () => {
+    const mapping = { '*': 'gpt-image-1', 'photo-*': 'gpt-6-luna', 'photo-portrait': 'gpt-image-2' }
+    expect(isOpenAIImageTestModel(mapping, 'photo-landscape', true)).toBe(false)
+    expect(isOpenAIImageTestModel(mapping, 'photo-portrait', true)).toBe(true)
+    expect(isOpenAIImageTestModel(mapping, 'illustration', true)).toBe(true)
   })
 })
