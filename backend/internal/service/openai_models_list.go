@@ -165,7 +165,12 @@ func standardOpenAIModelsBody(body []byte, fromManifest bool) ([]byte, error) {
 // projectAccountModelsBody projects chat mappings and exposes the separately
 // enabled Free web image compatibility entries only in the standard API list.
 func projectAccountModelsBody(body []byte, account *Account, group *Group, codex bool) ([]byte, error) {
-	projected, err := projectAccountMappedModelsBody(body, account, group, codex)
+	// Retirement applies to resolved public aliases, never raw upstream IDs.
+	projected, err := projectAccountModelAliases(body, account, group, codex)
+	if err != nil {
+		return nil, err
+	}
+	projected, _, err = filterRetiredOpenAIPublicModelsBody(projected, []Account{*account}, codex)
 	if err != nil || codex || !isFreeChatGPTWebImageAccount(account) {
 		return projected, err
 	}
@@ -216,7 +221,9 @@ func projectAccountModelsBody(body []byte, account *Account, group *Group, codex
 	return json.Marshal(envelope)
 }
 
-func projectAccountMappedModelsBody(body []byte, account *Account, group *Group, codex bool) ([]byte, error) {
+// projectAccountModelAliases retains the source entry's metadata, never changes
+// the shared response, and never synthesizes models absent from this account.
+func projectAccountModelAliases(body []byte, account *Account, group *Group, codex bool) ([]byte, error) {
 	if account.IsOpenAIPassthroughEnabled() || len(account.GetModelMapping()) == 0 {
 		return body, nil
 	}

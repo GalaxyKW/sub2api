@@ -334,7 +334,7 @@ describe('AccountTestModal', () => {
     await flushPromises()
     expect((wrapper.vm as any).modelOptionsForMode.map((model: { id: string }) => model.id)).toEqual(images)
     for (const image of images) {
-      ;(wrapper.vm as any).selectedModelId = image
+      (wrapper.vm as any).selectedModelId = image
       await flushPromises()
       expect(wrapper.find('[data-testid="free-web-image-test-disabled"]').exists()).toBe(false)
       expect((wrapper.vm as any).canStartTest).toBe(true)

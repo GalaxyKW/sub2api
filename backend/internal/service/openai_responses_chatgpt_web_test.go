@@ -263,6 +263,44 @@ func TestWebImageResponseHeartbeatStopsAndFailureIsSSE(t *testing.T) {
 	require.Equal(t, before, recorder.Body.Len())
 }
 
+func TestWebImageResponseFailureKeepsRequiredCreatedAt(t *testing.T) {
+	for _, first := range []string{
+		`{"type":"response.output_text.delta","delta":"Planning image"}`,
+		`{"type":"response.created","response":{"id":"resp_web","created_at":1800000000}}`,
+		"",
+	} {
+		t.Run(first, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			stream := newWebImageResponseStream(context.Background(), c, time.Hour)
+			defer stream.Close()
+			if first != "" {
+				require.NoError(t, stream.Feed([]byte("data: "+first+"\n\n"), http.Header{}))
+			} else {
+				stream.BeginImage(0, "ig_web_failure")
+			}
+			stream.Fail(&OpenAIImagesUpstreamError{ErrorType: "upstream_error", Code: "upstream_response_failed", Message: "The upstream Responses turn did not complete"})
+			events := webImageTestEvents(t, recorder.Body.String())
+			require.Equal(t, "response.failed", events[len(events)-1]["type"])
+			var createdAt float64
+			for index, event := range events {
+				require.Equal(t, float64(index), event["sequence_number"])
+				if response, ok := event["response"].(map[string]any); ok {
+					value := requireWebImageTestValue[float64](t, response["created_at"])
+					require.Positive(t, value)
+					if createdAt == 0 {
+						createdAt = value
+					}
+					require.Equal(t, createdAt, value)
+				}
+			}
+			if strings.Contains(first, "1800000000") {
+				require.Equal(t, float64(1800000000), createdAt)
+			}
+		})
+	}
+}
+
 func TestWebImageCapturePropagatesClientCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	capture := newWebImageCaptureWriter(ctx)

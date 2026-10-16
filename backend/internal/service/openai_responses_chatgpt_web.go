@@ -630,6 +630,7 @@ type webImageResponseStream struct {
 	c              *gin.Context
 	header         http.Header
 	sequence       int
+	createdAt      responsesCreatedAtStamper
 	started        bool
 	terminal       bool
 	writeErr       error
@@ -791,6 +792,7 @@ func (w *webImageResponseStream) sendLocked(kind string, event map[string]any) {
 		w.writeErr = err
 		return
 	}
+	encoded, _ = w.createdAt.Stamp(encoded, kind)
 	_, w.writeErr = fmt.Fprintf(w.c.Writer, "event: %s\ndata: %s\n\n", kind, encoded)
 	if w.writeErr == nil {
 		w.c.Writer.Flush()

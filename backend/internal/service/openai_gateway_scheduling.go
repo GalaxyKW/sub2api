@@ -447,7 +447,7 @@ func openAICompatibleAccountEligibilityFailureReasonBeforeProfit(ctx context.Con
 			return reason
 		}
 	}
-	if requestedModel != "" && (!OpenAIImagesEndpointFromContext(ctx) || !isFreeChatGPTWebImageAccount(account)) && !account.IsModelSupported(requestedModel) {
+	if requestedModel != "" && (!OpenAIImagesEndpointFromContext(ctx) || !isFreeChatGPTWebImageAccount(account)) && !supportsOpenAIRequestModel(account, requestedModel, requireCompact) {
 		return "model_not_supported"
 	}
 	if !account.SupportsOpenAIEndpointCapability(requiredCapability) {

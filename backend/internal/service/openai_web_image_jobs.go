@@ -298,6 +298,7 @@ func webImageJobResult(record webImageJobRecord) (chatgptwebimage.Result, error)
 
 func readWebImageJob(path string) (webImageJobRecord, error) {
 	var record webImageJobRecord
+	//nolint:gosec // G703: callers join the operator-owned store with a server SHA-256 key or direct ReadDir basename, never a client path.
 	info, err := os.Stat(path)
 	if err != nil {
 		return record, err
@@ -305,6 +306,7 @@ func readWebImageJob(path string) (webImageJobRecord, error) {
 	if info.Size() > webImageJobMaxFileBytes {
 		return record, errors.New("image job exceeds storage limit")
 	}
+	//nolint:gosec // G703: the path has the same server-owned origin as the Stat call above; requests cannot supply a filename.
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return record, err

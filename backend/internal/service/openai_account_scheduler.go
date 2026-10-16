@@ -1820,7 +1820,7 @@ func (s *defaultOpenAIAccountScheduler) isAccountRequestCompatibleReason(ctx con
 			return false, reason
 		}
 	}
-	if req.RequestedModel != "" && (!imageRequest || !isFreeChatGPTWebImageAccount(account)) && !account.IsModelSupported(req.RequestedModel) {
+	if req.RequestedModel != "" && (!imageRequest || !isFreeChatGPTWebImageAccount(account)) && !supportsOpenAIRequestModel(account, req.RequestedModel, req.RequireCompact) {
 		return false, "model_not_supported"
 	}
 	if req.GroupID != nil && s != nil && s.service != nil &&
